@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+from deepsuite.ds_functions import *
+from deepsuite.tf_functions import *
+import tensorflow as tf
+import tensorflow_datasets as tfds
+from tensorboard.plugins.hparams import api as hp
+import glob
+import os
+import distutils
+
+
+# Hyperparameter domains
+hparam_domains = {}
+hparam_domains['mel_bands'] = hp.HParam('mel_bands', hp.Discrete([96]))
+hparam_domains['num_frames'] = hp.HParam('num_frames', hp.Discrete([187]))
+hparam_domains['samplerate'] = hp.HParam('samplerate', hp.Discrete([16000]))
+hparam_domains['frame_size'] = hp.HParam('frame_size', hp.Discrete([512]))
+hparam_domains['step_size'] = hp.HParam('step_size', hp.Discrete([256]))
+hparam_domains['feature_type'] = hp.HParam('feature_type', hp.Discrete(['essentia', 'tfds']))
+
+hparam_domains['batch_size'] = hp.HParam('batch_size', hp.Discrete([32, 64, 128, 256, 512]))
+hparam_domains['classifier_activation'] = hp.HParam('classifier_activation', hp.Discrete(['linear', 'relu']))
+hparam_domains['final_activation'] = hp.HParam('final_activation', hp.Discrete(['linear', 'softmax', 'sigmoid']))
+hparam_domains['weights'] = hp.HParam('weights', hp.Discrete(['', 'MTT_musicnn_4class_transfer_learning', 'MSD_musicnn_4class_transfer_learning']))
+hparam_domains['finetuning'] = hp.HParam('finetuning', hp.Discrete([True, False]))
+hparam_domains['optimizer'] = hp.HParam('optimizer', hp.Discrete(['Adam', 'SGD']))
+hparam_domains['learning_rate'] = hp.HParam('learning_rate', hp.Discrete([0.01, 0.001, 0.0001]))
+
+METRIC_ACCURACY = 'sparse_categorical_accuracy'
+
+
+def write_hparam_domains(log_dir):
+    if not glob.glob(os.path.join(log_dir, '*.hparams.v2')):
+        with tf.summary.create_file_writer(log_dir, filename_suffix='.hparams.v2').as_default():
+            hp.hparams_config(
+                hparams=list(hparam_domains.values()),
+                metrics=[hp.Metric(METRIC_ACCURACY, group='', display_name='Train Set Accuracy', dataset_type=hp.Metric.TRAINING), 
+                         hp.Metric('val_'+METRIC_ACCURACY, group='', display_name='Validation Set Accuracy', dataset_type=hp.Metric.VALIDATION),
+                         hp.Metric('best_epoch', group='', display_name='Best Epoch', dataset_type=hp.Metric.VALIDATION)],
+            )
+
+
+def get_features(hparams):
+    if hparams['feature_type'] == 'tfds':
+        raw_train_ds, ds_info = tfds.load('emotional_guitar', split='train', shuffle_files=True, with_info=True, as_supervised=True)
+        raw_val_ds = tfds.load('emotional_guitar', split='validation', shuffle_files=False, with_info=False, as_supervised=True)
+        classes = ds_info.features['emotion'].names
+
+        train_ds = raw_train_ds.apply(lambda ds: ds_melspectrogram_db(ds, ds_info.features['audio'].sample_rate, hparams['samplerate'], hparams['frame_size'], hparams['frame_size'], hparams['step_size'], hparams['mel_bands'])).cache().apply(lambda ds: ds_time_slicer(ds, hparams['num_frames'], -1))
+        val_ds = raw_val_ds.apply(lambda ds: ds_melspectrogram_db(ds, ds_info.features['audio'].sample_rate, hparams['samplerate'], hparams['frame_size'], hparams['frame_size'], hparams['step_size'], hparams['mel_bands'])).apply(lambda ds: ds_time_slicer(ds, hparams['num_frames'], 0)).cache()
+        # test_ds = raw_test_ds.apply(lambda ds: ds_melspectrogram_db(ds, ds_info.features['audio'].sample_rate, hparams['samplerate'], hparams['frame_size'], hparams['frame_size'], hparams['step_size'], hparams['mel_bands'])).apply(lambda ds: ds_time_slicer(ds, hparams['num_frames'], 0))
+
+    elif hparams['feature_type'] == 'essentia':
+         
+        from essentia.streaming import MonoLoader, FrameCutter, TensorflowInputMusiCNN
+        import essentia
+        essentia.log.infoActive = False
+
+        def melspectrogram_essentia(path, samplerate, frame_size, step_size):
+            loader = MonoLoader(filename=path, sampleRate=float(samplerate))
+            fc = FrameCutter(frameSize=int(frame_size), hopSize=int(step_size), startFromZero=True, validFrameThresholdRatio=1)
+            extractor = TensorflowInputMusiCNN()
+            pool = essentia.Pool()
+
+            loader.audio >> fc.signal
+            fc.frame >> extractor.frame
+            extractor.bands >> (pool, "melbands")
+
+            essentia.run(loader)
+            return pool['melbands']
+
+
+        def ds_filepath(ds, basedir, num_parallel_calls=tf.data.experimental.AUTOTUNE):
+            def tf_filepath(basedir, filename, instrument, emotion):
+                return (tf.strings.join([basedir, '/emotional_', instrument, '_dataset/', emotion, '/', filename]), emotion)
+            return ds.map(lambda filename, instrument, emotion: tf_filepath(basedir, filename, instrument, emotion), num_parallel_calls)
+
+
+        def ds_melspectrogram_essentia(ds, samplerate, frame_size, step_size, num_parallel_calls=tf.data.experimental.AUTOTUNE):
+            def tf_melspectrogram_essentia(path, samplerate, frame_size, step_size):
+                melbands, = tf.py_function(tf_datatype_wrapper(melspectrogram_essentia), [path, samplerate, frame_size, step_size], [tf.float32])
+                melbands.set_shape((None, 96))
+                return melbands
+
+            def tf_encode_emotion(label):
+                if label == tf.constant('aggressive'):
+                    return tf.constant(0, dtype=tf.int64)
+                elif label == tf.constant('happy'):
+                    return tf.constant(1, dtype=tf.int64)
+                elif label == tf.constant('relaxed'):
+                    return tf.constant(2, dtype=tf.int64)
+                elif label == tf.constant('sad'):
+                    return tf.constant(3, dtype=tf.int64)
+                else:
+                    return tf.int64.as_numpy_dtype(-1)
+
+            return ds.map(lambda path, label: (tf_melspectrogram_essentia(path, samplerate, frame_size, step_size), tf_encode_emotion(label)), num_parallel_calls)
+
+
+        classes = ['aggressive', 'happy', 'relaxed', 'sad']
+        basedir = 'tensorflow_datasets/downloads/extracted/ZIP.emotional_guitar-v0.3.0.zip'
+        csv_ds = tf.data.experimental.CsvDataset(os.path.join(basedir, 'annotations_emotional_guitar_dataset.csv'), [tf.string, tf.string, tf.string], header=True, select_cols=[1, 2, 3])
+
+        train_ds = csv_ds.take(319)\
+            .apply(lambda ds: ds_filepath(ds, basedir))\
+            .apply(lambda ds: ds_melspectrogram_essentia(ds, hparams['samplerate'], hparams['frame_size'], hparams['step_size']))\
+            .cache()\
+            .apply(lambda ds: ds_time_slicer(ds, hparams['num_frames'], -1))
+        val_ds = csv_ds.skip(319).take(84)\
+            .apply(lambda ds: ds_filepath(ds, basedir))\
+            .apply(lambda ds: ds_melspectrogram_essentia(ds, hparams['samplerate'], hparams['frame_size'], hparams['step_size']))\
+            .apply(lambda ds: ds_time_slicer(ds, hparams['num_frames'], 0))
+
+    else:
+        raise ValueError('Unknown feature type "{}"'.format(hparams['feature_type']))
+        
+    return classes, train_ds, val_ds
+
+def get_model(hparams, num_classes):
+    from keras_audio_models.models import build_musicnn_classifier
+
+    inputs = tf.keras.Input(shape=(hparams['num_frames'], hparams['mel_bands']), name='input')
+    model = build_musicnn_classifier(inputs, num_classes, 100, hparams['final_activation'])
+    model.get_layer('backend').logits.activation = tf.keras.activations.get(hparams['classifier_activation'])
+    model.load_weights('keras_audio_models/{}.h5'.format(hparams['weights']))
+
+    if not hparams['finetuning']:
+        model.get_layer('frontend').trainable = False
+        model.get_layer('midend').trainable = False
+        model.get_layer('backend').bn_flat_pool.trainable = False
+        model.get_layer('backend').penultimate.trainable = False
+        model.get_layer('backend').bn_penultimate.trainable = False
+
+    from_logits = model.get_layer('classifier').activation == tf.keras.activations.linear
+    optimizer = tf.keras.optimizers.get({'class_name': hparams['optimizer'], 'config': {'learning_rate': hparams['learning_rate']}})
+    model.compile(optimizer=optimizer, loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=from_logits), metrics=[METRIC_ACCURACY])
+    
+    return model
+
+
+def run_experiment(hparams, log_base_dir, exp_base_name):
+    classes, train_ds, val_ds = get_features(hparams)
+    num_classes = len(classes)
+    model = get_model(hparams, num_classes)
+    
+    train_cardinality = train_ds.cardinality().numpy()
+    if train_cardinality == tf.data.INFINITE_CARDINALITY or train_cardinality == tf.data.UNKNOWN_CARDINALITY or train_cardinality < 0:
+        train_cardinality = 2500
+    
+    train_pipe = train_ds\
+        .shuffle(train_cardinality)\
+        .batch(hparams['batch_size'])\
+        .prefetch(tf.data.experimental.AUTOTUNE)
+    if val_ds is not None:
+        val_pipe = val_ds\
+            .batch(hparams['batch_size'])\
+            .cache()\
+            .prefetch(tf.data.experimental.AUTOTUNE)
+    else:
+        val_pipe = None
+    # test_pipe = test_ds\
+    #     .batch(hparams['batch_size'])\
+    #     .cache()\
+    #     .prefetch(tf.data.experimental.AUTOTUNE)
+    
+    exp_decay = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=0.001, decay_steps=15, decay_rate=0.4, staircase=True)
+    pcwconst_decay = tf.keras.optimizers.schedules.PiecewiseConstantDecay([13, 28, 43, 58], [0.001, 0.0004, 0.00016, 6.4e-5, 4e-5])
+    
+    from datetime import datetime
+    from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, LearningRateScheduler, TensorBoard
+    from deepsuite.keras import ConfusionMatrixOnEpoch
+    from deepsuite.keras_functions import get_confusion_matrix
+    from deepsuite.plotting import mpl_fig_to_tf_image
+
+
+    exp_name = os.path.join(exp_base_name, model.name)
+    run_name = exp_name+'-'+datetime.now().strftime("%y%m%d-%H%M%S")
+    log_dir = os.path.join(log_base_dir, run_name)
+    os.makedirs(os.path.dirname(exp_name), exist_ok=True)
+
+    tensorboard = TensorBoard(log_dir=log_dir, profile_batch=2)
+    hparam_writer = tf.summary.create_file_writer(log_dir, filename_suffix='.hparams.v2')
+    hyper_param_logger = hp.KerasCallback(hparam_writer, hparams, trial_id=run_name)
+    lrate = LearningRateScheduler(pcwconst_decay, verbose=1)
+    confusion_matrix = ConfusionMatrixOnEpoch(log_dir, classes, ['train', 'validation'])
+    callbacks = [tensorboard, hyper_param_logger]#[, confusion_matrix, lrate],
+    if val_ds is not None:    
+        earlystopper = EarlyStopping(monitor='val_'+METRIC_ACCURACY, patience=hparams['early_stopping_patience'], verbose=1, restore_best_weights=True)
+        checkpointer = ModelCheckpoint(exp_name+'.h5', monitor='val_'+METRIC_ACCURACY, verbose=1, save_best_only=True)
+        callbacks += [earlystopper, checkpointer]
+
+    results = model.fit(train_pipe, validation_data=val_pipe, epochs=hparams['epochs'], verbose=2, callbacks=callbacks)
+    if os.path.exists(exp_name+'.h5'):
+        model.load_weights(exp_name+'.h5') # when max epochs gets exceeded, early stopping callback doesn't load best model
+
+    # Write best model summaries
+    with tf.summary.create_file_writer(log_dir, filename_suffix='.final.v2').as_default():
+        best_epoch = results.history[earlystopper.monitor].index(earlystopper.best)
+        tf.summary.scalar('best_epoch', best_epoch, step=0)
+        results_train = model.evaluate(train_pipe, verbose=0)
+        results_val = model.evaluate(val_pipe, verbose=0)
+        for name, train, val in zip(model.metrics_names, results_train, results_val):
+            tf.summary.scalar(name, train, step=0)
+            tf.summary.scalar('val_'+name, val, step=0)
+            print('The final model has achieved a {} of {:.3f} and a {} of {:.3f} at epoch {}'.format(name, train, 'val_'+name, val, best_epoch+1))
+        train_conf = get_confusion_matrix(model, train_pipe, classes, normalize=True, title='')
+        tf.summary.image('Train Set Confusion', mpl_fig_to_tf_image(train_conf), step=best_epoch)
+        val_conf = get_confusion_matrix(model, val_pipe, classes, normalize=True, title='')
+        tf.summary.image('Validation Set Confusion', mpl_fig_to_tf_image(val_conf), step=best_epoch)
+        
+        
+if __name__ == '__main__':
+    
+    import argparse
+    import itertools
+    
+    log_base_dir = os.path.expanduser('~/private/tensorboard')
+    exp_base_name = os.path.splitext(os.path.basename(__file__))[0]
+    log_dir = os.path.join(log_base_dir, exp_base_name)
+
+    parser = argparse.ArgumentParser(description='''
+    Run emotional guitar classification experiment.''',
+    allow_abbrev=False)
+    features_config = parser.add_argument_group('Feature options')
+    features_config.add_argument('-m', '--mel-bands', default=[96], nargs='*', type=int)
+    features_config.add_argument('-n', '--num-frames', default=[187], nargs='*', type=int)
+    features_config.add_argument('-r', '--samplerate', default=[16000], nargs='*', type=int)
+    features_config.add_argument('-f', '--frame-size', default=[512], nargs='*', type=int)
+    features_config.add_argument('-s', '--step-size', default=[256], nargs='*', type=int)
+    features_config.add_argument('-t', '--feature-type', default=['essentia'], nargs='*', type=str, choices=hparam_domains['feature_type'].domain.values)
+    
+    model_config = parser.add_argument_group('Model options')
+    model_config.add_argument('-c', '--classifier-activation', default=['relu'], nargs='*', type=str, choices=hparam_domains['classifier_activation'].domain.values)
+    model_config.add_argument('-a', '--final-activation', default=['softmax'], nargs='*', type=str, choices=hparam_domains['final_activation'].domain.values)
+    model_config.add_argument('-w', '--weights', default=['MTT_musicnn_4class_transfer_learning'], nargs='*', type=str, choices=hparam_domains['weights'].domain.values)
+    model_config.add_argument('--finetuning', default=[False], nargs='*', type=lambda x: bool(distutils.util.strtobool(x)))
+    model_config.add_argument('-o', '--optimizer', default=['Adam'], nargs='*', type=str, choices=hparam_domains['optimizer'].domain.values)
+    model_config.add_argument('-l', '--learning-rate', default=[0.001], nargs='*', type=float)
+    model_config.add_argument('-b', '--batch-size', default=[256], nargs='*', type=int)
+    
+    train_config = parser.add_argument_group('Training options')
+#     train_config.add_argument('--validation_split', default=[0.2], nargs='*', type=float)
+    train_config.add_argument('--epochs', default=[100], nargs='*', type=int)
+    train_config.add_argument('--early_stopping_patience', default=[30], nargs='*', type=int)
+
+    args = vars(parser.parse_args())
+    write_hparam_domains(log_dir)
+
+    for param_combo in itertools.product(*args.values()):
+        hparams = dict(zip(args.keys(), param_combo))
+        print(f'Running parameter combination {", ".join(["{}: {}".format(k, v) for k, v in hparams.items()])}')
+        run_experiment(hparams, log_base_dir, exp_base_name)
+                                                    
