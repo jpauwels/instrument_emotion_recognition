@@ -57,7 +57,7 @@ def tf_zscore(tensor, epsilon):
     eps = tf.constant(epsilon)
     return (tensor - tf.math.reduce_mean(tensor, keepdims=True)) / tf.math.maximum(tf.math.reduce_std(tensor, keepdims=True), eps)
 
-def tf_time_slicer(tensor, label, slice_length, start=-1):
+def tf_step_slicer(tensor, label, slice_length, start=-1):
     num_steps, num_features = tensor.shape
     num_slices = num_steps // slice_length
     if start < 0:
@@ -69,3 +69,8 @@ def tf_time_slicer(tensor, label, slice_length, start=-1):
     flat_slices = tf.image.extract_patches(tensor_expanded, sizes=[1, slice_length, num_features, 1], strides=[1, slice_length, num_features, 1], rates=[1, 1, 1, 1], padding='VALID', name='time_slicer')
     slices = tf.reshape(flat_slices, [num_slices, slice_length, num_features])
     return slices, tf.repeat(label, num_slices)
+
+def tf_value_encoder(key_tensor, value_tensor=None):
+    if value_tensor is None:
+        value_tensor = tf.range(key_tensor.shape[0])
+    return tf.lookup.StaticHashTable(tf.lookup.KeyValueTensorInitializer(key_tensor, value_tensor), default_value=-1)

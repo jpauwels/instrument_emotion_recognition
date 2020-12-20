@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 from deepsuite.ds_functions import *
 from deepsuite.tf_functions import *
+from deepsuite.plotting import plot_confusion_matrix, mpl_fig_to_tf_image
+from deepsuite.keras_functions import get_confusion_matrix
 import tensorflow as tf
 import tensorflow_datasets as tfds
 from tensorboard.plugins.hparams import api as hp
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, LearningRateScheduler, TensorBoard
+from datetime import datetime
 import glob
 import os
 import distutils
+from collections import Counter
 
 
 # Hyperparameter domains
@@ -44,10 +49,10 @@ def get_features(hparams):
     if hparams['feature_type'] == 'tfds':
         raw_train_ds, ds_info = tfds.load('emotional_guitar', split='train', shuffle_files=True, with_info=True, as_supervised=True)
         raw_val_ds = tfds.load('emotional_guitar', split='validation', shuffle_files=False, with_info=False, as_supervised=True)
-        classes = ds_info.features['emotion'].names
+        emotions = ds_info.features['emotion'].names
 
-        train_ds = raw_train_ds.apply(lambda ds: ds_melspectrogram_db(ds, ds_info.features['audio'].sample_rate, hparams['samplerate'], hparams['frame_size'], hparams['frame_size'], hparams['step_size'], hparams['mel_bands'])).cache().apply(lambda ds: ds_time_slicer(ds, hparams['num_frames'], -1))
-        val_ds = raw_val_ds.apply(lambda ds: ds_melspectrogram_db(ds, ds_info.features['audio'].sample_rate, hparams['samplerate'], hparams['frame_size'], hparams['frame_size'], hparams['step_size'], hparams['mel_bands'])).apply(lambda ds: ds_time_slicer(ds, hparams['num_frames'], 0)).cache()
+        train_ds = raw_train_ds.apply(lambda ds: ds_melspectrogram_db(ds, ds_info.features['audio'].sample_rate, hparams['samplerate'], hparams['frame_size'], hparams['frame_size'], hparams['step_size'], hparams['mel_bands']))
+        val_ds = raw_val_ds.apply(lambda ds: ds_melspectrogram_db(ds, ds_info.features['audio'].sample_rate, hparams['samplerate'], hparams['frame_size'], hparams['frame_size'], hparams['step_size'], hparams['mel_bands']))
         # test_ds = raw_test_ds.apply(lambda ds: ds_melspectrogram_db(ds, ds_info.features['audio'].sample_rate, hparams['samplerate'], hparams['frame_size'], hparams['frame_size'], hparams['step_size'], hparams['mel_bands'])).apply(lambda ds: ds_time_slicer(ds, hparams['num_frames'], 0))
 
     elif hparams['feature_type'] == 'essentia':
@@ -72,49 +77,36 @@ def get_features(hparams):
 
         def ds_filepath(ds, basedir, num_parallel_calls=tf.data.experimental.AUTOTUNE):
             def tf_filepath(basedir, filename, instrument, emotion):
-                return (tf.strings.join([basedir, '/emotional_', instrument, '_dataset/', emotion, '/', filename]), emotion)
-            return ds.map(lambda filename, instrument, emotion: tf_filepath(basedir, filename, instrument, emotion), num_parallel_calls)
+                return tf.strings.join([basedir, '/emotional_', instrument, '_dataset/', emotion, '/', filename])
+            return ds.map(lambda filename, instrument, emotion, performer: tf_filepath(basedir, filename, instrument, emotion), num_parallel_calls)
 
 
         def ds_melspectrogram_essentia(ds, samplerate, frame_size, step_size, num_parallel_calls=tf.data.experimental.AUTOTUNE):
             def tf_melspectrogram_essentia(path, samplerate, frame_size, step_size):
                 melbands, = tf.py_function(tf_datatype_wrapper(melspectrogram_essentia), [path, samplerate, frame_size, step_size], [tf.float32])
-                melbands.set_shape((None, 96))
+                melbands.set_shape((None, hparams['mel_bands']))
                 return melbands
+            return ds.map(lambda path: tf_melspectrogram_essentia(path, samplerate, frame_size, step_size), num_parallel_calls)
 
-            def tf_encode_emotion(label):
-                if label == tf.constant('aggressive'):
-                    return tf.constant(0, dtype=tf.int64)
-                elif label == tf.constant('happy'):
-                    return tf.constant(1, dtype=tf.int64)
-                elif label == tf.constant('relaxed'):
-                    return tf.constant(2, dtype=tf.int64)
-                elif label == tf.constant('sad'):
-                    return tf.constant(3, dtype=tf.int64)
-                else:
-                    return tf.int64.as_numpy_dtype(-1)
+        basedir = '/Users/johan/Datasets/Emotional guitar dataset'
+        emotions = ['aggressive', 'happy', 'relaxed', 'sad']
+        performers = tf.constant(['LucTur', 'DavBen', 'OweWin', 'ValFui', 'AdoLaV', 'MatRig', 'TomCan', 'TizCam', 'SteRom', 'SimArm', 'SamLor', 'AleMar', 'MasChi', 'FilMel', 'GioAcq', 'TizBol', 'SalOli', 'FraSet', 'FedCer', 'CesSam', 'AntPao', 'DavRos', 'FraBen', 'GiaFer', 'GioDic', 'NicCon', 'AntDel', 'NicLat', 'LucFra', 'AngLoi', 'MarPia'])
+        csv_ds = tf.data.experimental.CsvDataset(os.path.join(basedir, 'annotations_emotional_guitar_dataset.csv'), [tf.string, tf.string, tf.string, tf.string], header=True, select_cols=[1, 2, 3, 8])
+        melspec_ds = csv_ds.apply(lambda ds: ds_filepath(ds, basedir)).apply(lambda ds: ds_melspectrogram_essentia(ds, hparams['samplerate'], hparams['frame_size'], hparams['step_size']))
+        emotion_ds = csv_ds.map(lambda filename, instrument, emotion, performer: emotion).apply(lambda ds: ds_value_encoder(ds, tf.constant(emotions)))
+        performer_ds = csv_ds.map(lambda filename, instrument, emotion, performer: performer).apply(lambda ds: ds_value_encoder(ds, performers))
 
-            return ds.map(lambda path, label: (tf_melspectrogram_essentia(path, samplerate, frame_size, step_size), tf_encode_emotion(label)), num_parallel_calls)
-
-
-        classes = ['aggressive', 'happy', 'relaxed', 'sad']
-        basedir = 'tensorflow_datasets/downloads/extracted/ZIP.emotional_guitar-v0.3.0.zip'
-        csv_ds = tf.data.experimental.CsvDataset(os.path.join(basedir, 'annotations_emotional_guitar_dataset.csv'), [tf.string, tf.string, tf.string], header=True, select_cols=[1, 2, 3])
-
-        train_ds = csv_ds.take(319)\
-            .apply(lambda ds: ds_filepath(ds, basedir))\
-            .apply(lambda ds: ds_melspectrogram_essentia(ds, hparams['samplerate'], hparams['frame_size'], hparams['step_size']))\
-            .cache()\
-            .apply(lambda ds: ds_time_slicer(ds, hparams['num_frames'], -1))
-        val_ds = csv_ds.skip(319).take(84)\
-            .apply(lambda ds: ds_filepath(ds, basedir))\
-            .apply(lambda ds: ds_melspectrogram_essentia(ds, hparams['samplerate'], hparams['frame_size'], hparams['step_size']))\
-            .apply(lambda ds: ds_time_slicer(ds, hparams['num_frames'], 0))
+        all_dict = {'features': melspec_ds, 'labels': emotion_ds, 'groups': performer_ds}
+        train_ds_dict = ds_slice_dict(all_dict, 319)
+        val_ds_dict = ds_slice_dict(all_dict, 84, 319)
+        train_ds = ds_supervised_pair(train_ds_dict, 'features', 'labels').cache()
+        val_ds = ds_supervised_pair(val_ds_dict, 'features', 'labels').cache()
 
     else:
         raise ValueError('Unknown feature type "{}"'.format(hparams['feature_type']))
         
-    return classes, train_ds, val_ds
+    return emotions, train_ds, val_ds
+
 
 def get_model(hparams, num_classes):
     from keras_audio_models.models import build_musicnn_classifier
@@ -139,39 +131,35 @@ def get_model(hparams, num_classes):
 
 
 def run_experiment(hparams, log_base_dir, exp_base_name):
-    classes, train_ds, val_ds = get_features(hparams)
-    num_classes = len(classes)
+    class_names, train_ds, val_ds = get_features(hparams)
+    num_classes = len(class_names)
     model = get_model(hparams, num_classes)
     
+    def ds_step_slicer(ds, num_features, slice_length, start=-1, num_parallel_calls=tf.data.experimental.AUTOTUNE):
+        return ds.map(lambda group_idx, tensor_label: (group_idx, slice_steps_to_ds(*tensor_label, num_features, slice_length, start)), num_parallel_calls=num_parallel_calls)
+
+    def select_2nd(first, second):
+        return second
+
     train_cardinality = train_ds.cardinality().numpy()
     if train_cardinality == tf.data.INFINITE_CARDINALITY or train_cardinality == tf.data.UNKNOWN_CARDINALITY or train_cardinality < 0:
         train_cardinality = 2500
     
-    train_pipe = train_ds\
+    train_sliced_ds = train_ds.enumerate().apply(lambda ds: ds_step_slicer(ds, hparams['mel_bands'], hparams['num_frames'], -1))
+    train_pipe = train_sliced_ds\
+        .flat_map(select_2nd)\
         .shuffle(train_cardinality)\
         .batch(hparams['batch_size'])\
         .prefetch(tf.data.experimental.AUTOTUNE)
     if val_ds is not None:
-        val_pipe = val_ds\
+        val_sliced_ds = val_ds.enumerate().apply(lambda ds: ds_step_slicer(ds, hparams['mel_bands'], hparams['num_frames'], 0)).cache()
+        val_pipe = val_sliced_ds\
+            .flat_map(select_2nd)\
             .batch(hparams['batch_size'])\
             .cache()\
             .prefetch(tf.data.experimental.AUTOTUNE)
     else:
         val_pipe = None
-    # test_pipe = test_ds\
-    #     .batch(hparams['batch_size'])\
-    #     .cache()\
-    #     .prefetch(tf.data.experimental.AUTOTUNE)
-    
-    exp_decay = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=0.001, decay_steps=15, decay_rate=0.4, staircase=True)
-    pcwconst_decay = tf.keras.optimizers.schedules.PiecewiseConstantDecay([13, 28, 43, 58], [0.001, 0.0004, 0.00016, 6.4e-5, 4e-5])
-    
-    from datetime import datetime
-    from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, LearningRateScheduler, TensorBoard
-    from deepsuite.keras import ConfusionMatrixOnEpoch
-    from deepsuite.keras_functions import get_confusion_matrix
-    from deepsuite.plotting import mpl_fig_to_tf_image
-
 
     exp_name = os.path.join(exp_base_name, model.name)
     run_name = exp_name+'-'+datetime.now().strftime("%y%m%d-%H%M%S")
@@ -181,10 +169,13 @@ def run_experiment(hparams, log_base_dir, exp_base_name):
     tensorboard = TensorBoard(log_dir=log_dir, profile_batch=2)
     hparam_writer = tf.summary.create_file_writer(log_dir, filename_suffix='.hparams.v2')
     hyper_param_logger = hp.KerasCallback(hparam_writer, hparams, trial_id=run_name)
-    lrate = LearningRateScheduler(pcwconst_decay, verbose=1)
-    confusion_matrix = ConfusionMatrixOnEpoch(log_dir, classes, ['train', 'validation'])
+    # exp_decay = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=0.001, decay_steps=15, decay_rate=0.4, staircase=True)
+    # pcwconst_decay = tf.keras.optimizers.schedules.PiecewiseConstantDecay([13, 28, 43, 58], [0.001, 0.0004, 0.00016, 6.4e-5, 4e-5])
+    # lrate = LearningRateScheduler(pcwconst_decay, verbose=1)
+    # from deepsuite.keras import ConfusionMatrixOnEpoch
+    # confusion_matrix = ConfusionMatrixOnEpoch(log_dir, class_names, ['train', 'validation'])
     callbacks = [tensorboard, hyper_param_logger]#[, confusion_matrix, lrate],
-    if val_ds is not None:    
+    if val_ds is not None:
         earlystopper = EarlyStopping(monitor='val_'+METRIC_ACCURACY, patience=hparams['early_stopping_patience'], verbose=1, restore_best_weights=True)
         checkpointer = ModelCheckpoint(exp_name+'.h5', monitor='val_'+METRIC_ACCURACY, verbose=1, save_best_only=True)
         callbacks += [earlystopper, checkpointer]
@@ -192,6 +183,27 @@ def run_experiment(hparams, log_base_dir, exp_base_name):
     results = model.fit(train_pipe, validation_data=val_pipe, epochs=hparams['epochs'], verbose=2, callbacks=callbacks)
     if os.path.exists(exp_name+'.h5'):
         model.load_weights(exp_name+'.h5') # when max epochs gets exceeded, early stopping callback doesn't load best model
+
+    def majority_voting(sliced_ds):
+        soft_metrics = []
+        hard_metrics = []
+        soft_voting_labels = []
+        hard_voting_labels = []
+        # true_labels = tf.concat((*nonsliced_ds.map(lambda _, label: label),), axis=0)
+        true_labels = []
+        metric = tf.keras.metrics.get(METRIC_ACCURACY)
+        for _, file_slices in sliced_ds:
+            true_label = next(iter(file_slices))[1].numpy()
+            file_results = model.predict(file_slices.batch(hparams['batch_size']), verbose=0)
+            soft_results = file_results.mean(axis=0)
+            hard_metrics.append(tf.reduce_mean(metric(y_true=tf.repeat(true_label, file_results.shape[0]), y_pred=file_results)))
+            soft_metrics.append(metric(y_true=true_label, y_pred=soft_results))
+            true_labels.append(true_label)
+            soft_voting_labels.append(soft_results.argmax())
+            hard_voting_labels.append(next(Counter(file_results.argmax(axis=1)).elements()))
+        hard_metric = tf.reduce_mean(hard_metrics).numpy()
+        soft_metric = tf.reduce_mean(soft_metrics).numpy()
+        return soft_metric, hard_metric, true_labels, soft_voting_labels, hard_voting_labels
 
     # Write best model summaries
     with tf.summary.create_file_writer(log_dir, filename_suffix='.final.v2').as_default():
@@ -203,10 +215,21 @@ def run_experiment(hparams, log_base_dir, exp_base_name):
             tf.summary.scalar(name, train, step=0)
             tf.summary.scalar('val_'+name, val, step=0)
             print('The final model has achieved a {} of {:.3f} and a {} of {:.3f} at epoch {}'.format(name, train, 'val_'+name, val, best_epoch+1))
-        train_conf = get_confusion_matrix(model, train_pipe, classes, normalize=True, title='')
+        train_conf = get_confusion_matrix(model, train_pipe, class_names, normalize=True, title='')
         tf.summary.image('Train Set Confusion', mpl_fig_to_tf_image(train_conf), step=best_epoch)
-        val_conf = get_confusion_matrix(model, val_pipe, classes, normalize=True, title='')
+        val_conf = get_confusion_matrix(model, val_pipe, class_names, normalize=True, title='')
         tf.summary.image('Validation Set Confusion', mpl_fig_to_tf_image(val_conf), step=best_epoch)
+
+        metric_name = tf.keras.metrics.get(METRIC_ACCURACY).__name__.replace('_', ' ')
+        for sliced_ds, ds_name in [(train_sliced_ds, 'train'), (val_sliced_ds, 'validation')]:
+            soft_metric, hard_metric, true_labels, soft_voting_labels, hard_voting_labels = majority_voting(sliced_ds)
+            tf.summary.scalar(f'{ds_name.title()} Soft Voting {metric_name.title()}', soft_metric, step=0)
+            tf.summary.scalar(f'{ds_name.title()} Hard Voting {metric_name.title()}', hard_metric, step=0)
+            print(f'The final model has achieved a {ds_name} soft voting {metric_name} of {soft_metric:.3f} and a {ds_name} hard voting {metric_name} of {hard_metric:.3f} at epoch {best_epoch+1}')
+            soft_conf = plot_confusion_matrix(tf.math.confusion_matrix(true_labels, soft_voting_labels), class_names, normalize=True)
+            hard_conf = plot_confusion_matrix(tf.math.confusion_matrix(true_labels, hard_voting_labels), class_names, normalize=True)
+            tf.summary.image(f'{ds_name} Soft Voting Confusion', mpl_fig_to_tf_image(soft_conf), step=best_epoch)
+            tf.summary.image(f'{ds_name} Hard Voting Confusion', mpl_fig_to_tf_image(hard_conf), step=best_epoch)
         
         
 if __name__ == '__main__':
@@ -250,4 +273,3 @@ if __name__ == '__main__':
         hparams = dict(zip(args.keys(), param_combo))
         print(f'Running parameter combination {", ".join(["{}: {}".format(k, v) for k, v in hparams.items()])}')
         run_experiment(hparams, log_base_dir, exp_base_name)
-                                                    
