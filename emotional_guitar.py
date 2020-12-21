@@ -241,30 +241,41 @@ if __name__ == '__main__':
     exp_base_name = os.path.splitext(os.path.basename(__file__))[0]
     log_dir = os.path.join(log_base_dir, exp_base_name)
 
+    class ResetAppendAction(argparse._AppendAction):
+        def __init__(self, option_strings, dest, **kwargs):
+            self.reset = True
+            super(ResetAppendAction, self).__init__(option_strings, dest, **kwargs)
+
+        def __call__(self, parser, namespace, values, option_string=None):
+            if self.reset:
+                setattr(namespace, self.dest, [])
+                self.reset = False
+            super(ResetAppendAction, self).__call__(parser, namespace, values, option_string)
+
     parser = argparse.ArgumentParser(description='''
     Run emotional guitar classification experiment.''',
     allow_abbrev=False)
     features_config = parser.add_argument_group('Feature options')
-    features_config.add_argument('-m', '--mel-bands', default=[96], nargs='*', type=int)
-    features_config.add_argument('-n', '--num-frames', default=[187], nargs='*', type=int)
-    features_config.add_argument('-r', '--samplerate', default=[16000], nargs='*', type=int)
-    features_config.add_argument('-f', '--frame-size', default=[512], nargs='*', type=int)
-    features_config.add_argument('-s', '--step-size', default=[256], nargs='*', type=int)
-    features_config.add_argument('-t', '--feature-type', default=['essentia'], nargs='*', type=str, choices=hparam_domains['feature_type'].domain.values)
+    features_config.add_argument('-m', '--mel-bands', default=[96], action=ResetAppendAction, type=int)
+    features_config.add_argument('-n', '--num-frames', default=[187], action=ResetAppendAction, type=int)
+    features_config.add_argument('-r', '--samplerate', default=[16000], action=ResetAppendAction, type=int)
+    features_config.add_argument('-f', '--frame-size', default=[512], action=ResetAppendAction, type=int)
+    features_config.add_argument('-s', '--step-size', default=[256], action=ResetAppendAction, type=int)
+    features_config.add_argument('-t', '--feature-type', default=['essentia'], action=ResetAppendAction, type=str, choices=hparam_domains['feature_type'].domain.values)
     
     model_config = parser.add_argument_group('Model options')
-    model_config.add_argument('-c', '--classifier-activation', default=['relu'], nargs='*', type=str, choices=hparam_domains['classifier_activation'].domain.values)
-    model_config.add_argument('-a', '--final-activation', default=['softmax'], nargs='*', type=str, choices=hparam_domains['final_activation'].domain.values)
-    model_config.add_argument('-w', '--weights', default=['MTT_musicnn_4class_transfer_learning'], nargs='*', type=str, choices=hparam_domains['weights'].domain.values)
-    model_config.add_argument('--finetuning', default=[False], nargs='*', type=lambda x: bool(distutils.util.strtobool(x)))
-    model_config.add_argument('-o', '--optimizer', default=['Adam'], nargs='*', type=str, choices=hparam_domains['optimizer'].domain.values)
-    model_config.add_argument('-l', '--learning-rate', default=[0.001], nargs='*', type=float)
-    model_config.add_argument('-b', '--batch-size', default=[256], nargs='*', type=int)
+    model_config.add_argument('-c', '--classifier-activation', default=['relu'], action=ResetAppendAction, type=str, choices=hparam_domains['classifier_activation'].domain.values)
+    model_config.add_argument('-a', '--final-activation', default=['softmax'], action=ResetAppendAction, type=str, choices=hparam_domains['final_activation'].domain.values)
+    model_config.add_argument('-w', '--weights', default=['MTT_musicnn_4class_transfer_learning'], action=ResetAppendAction, type=str, choices=hparam_domains['weights'].domain.values)
+    model_config.add_argument('--finetuning', default=[False], action=ResetAppendAction, type=lambda x: bool(distutils.util.strtobool(x)))
+    model_config.add_argument('-o', '--optimizer', default=['Adam'], action=ResetAppendAction, type=str, choices=hparam_domains['optimizer'].domain.values)
+    model_config.add_argument('-l', '--learning-rate', default=[0.001], action=ResetAppendAction, type=float)
+    model_config.add_argument('-b', '--batch-size', default=[256], action=ResetAppendAction, type=int)
     
     train_config = parser.add_argument_group('Training options')
-#     train_config.add_argument('--validation_split', default=[0.2], nargs='*', type=float)
-    train_config.add_argument('--epochs', default=[100], nargs='*', type=int)
-    train_config.add_argument('--early_stopping_patience', default=[30], nargs='*', type=int)
+#     train_config.add_argument('--validation_split', default=[0.2], action=ResetAppendAction, type=float)
+    train_config.add_argument('-e', '--epochs', default=[100], action=ResetAppendAction, type=int)
+    train_config.add_argument('--early_stopping_patience', default=[30], action=ResetAppendAction, type=int)
 
     args = vars(parser.parse_args())
     write_hparam_domains(log_dir)
