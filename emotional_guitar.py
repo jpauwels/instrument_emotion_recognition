@@ -5,6 +5,7 @@ from deepsuite.plotting import plot_confusion_matrix, mpl_fig_to_tf_image
 from deepsuite.keras_functions import get_confusion_matrix
 import tensorflow as tf
 import tensorflow_datasets as tfds
+import guitar_emotion_recognition
 from tensorboard.plugins.hparams import api as hp
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, LearningRateScheduler, TensorBoard
 from datetime import datetime
@@ -47,8 +48,8 @@ def write_hparam_domains(log_dir):
 
 def get_features(hparams):
     if hparams['feature_type'] == 'tfds':
-        raw_train_ds, ds_info = tfds.load('emotional_guitar', split='train', shuffle_files=True, with_info=True, as_supervised=True)
-        raw_val_ds = tfds.load('emotional_guitar', split='validation', shuffle_files=False, with_info=False, as_supervised=True)
+        raw_train_ds, ds_info = tfds.load('guitar_emotion_recognition', split='train', shuffle_files=True, with_info=True, as_supervised=True)
+        raw_val_ds = tfds.load('guitar_emotion_recognition', split='validation', shuffle_files=False, with_info=False, as_supervised=True)
         emotions = ds_info.features['emotion'].names
 
         train_ds = raw_train_ds.apply(lambda ds: ds_melspectrogram_db(ds, ds_info.features['audio'].sample_rate, hparams['samplerate'], hparams['frame_size'], hparams['frame_size'], hparams['step_size'], hparams['mel_bands']))
@@ -76,9 +77,9 @@ def get_features(hparams):
 
 
         def ds_filepath(ds, basedir, num_parallel_calls=tf.data.experimental.AUTOTUNE):
-            def tf_filepath(basedir, filename, instrument, emotion):
-                return tf.strings.join([basedir, '/emotional_', instrument, '_dataset/', emotion, '/', filename])
-            return ds.map(lambda filename, instrument, emotion, performer: tf_filepath(basedir, filename, instrument, emotion), num_parallel_calls)
+            def tf_filepath(basedir, filename):
+                return tf.strings.join([basedir, '/emotional_guitar_dataset/', filename])
+            return ds.map(lambda filename, performer, emotion: tf_filepath(basedir, filename), num_parallel_calls)
 
 
         def ds_melspectrogram_essentia(ds, samplerate, frame_size, step_size, num_parallel_calls=tf.data.experimental.AUTOTUNE):
@@ -91,10 +92,10 @@ def get_features(hparams):
         basedir = '/Users/johan/Datasets/Emotional guitar dataset'
         emotions = ['aggressive', 'happy', 'relaxed', 'sad']
         performers = tf.constant(['LucTur', 'DavBen', 'OweWin', 'ValFui', 'AdoLaV', 'MatRig', 'TomCan', 'TizCam', 'SteRom', 'SimArm', 'SamLor', 'AleMar', 'MasChi', 'FilMel', 'GioAcq', 'TizBol', 'SalOli', 'FraSet', 'FedCer', 'CesSam', 'AntPao', 'DavRos', 'FraBen', 'GiaFer', 'GioDic', 'NicCon', 'AntDel', 'NicLat', 'LucFra', 'AngLoi', 'MarPia'])
-        csv_ds = tf.data.experimental.CsvDataset(os.path.join(basedir, 'annotations_emotional_guitar_dataset.csv'), [tf.string, tf.string, tf.string, tf.string], header=True, select_cols=[1, 2, 3, 8])
+        csv_ds = tf.data.experimental.CsvDataset(os.path.join(basedir, 'annotations_emotional_guitar_dataset.csv'), [tf.string, tf.string, tf.string], header=True, select_cols=[1, 2, 4])
         melspec_ds = csv_ds.apply(lambda ds: ds_filepath(ds, basedir)).apply(lambda ds: ds_melspectrogram_essentia(ds, hparams['samplerate'], hparams['frame_size'], hparams['step_size']))
-        emotion_ds = csv_ds.map(lambda filename, instrument, emotion, performer: emotion).apply(lambda ds: ds_value_encoder(ds, tf.constant(emotions)))
-        performer_ds = csv_ds.map(lambda filename, instrument, emotion, performer: performer).apply(lambda ds: ds_value_encoder(ds, performers))
+        emotion_ds = csv_ds.map(lambda filename, performer, emotion: emotion).apply(lambda ds: ds_value_encoder(ds, emotions))
+        performer_ds = csv_ds.map(lambda filename, performer, emotion: performer).apply(lambda ds: ds_value_encoder(ds, performers))
 
         all_dict = {'features': melspec_ds, 'labels': emotion_ds, 'groups': performer_ds}
         train_ds_dict = ds_slice_dict(all_dict, 319)
