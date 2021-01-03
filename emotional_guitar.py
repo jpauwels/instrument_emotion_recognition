@@ -27,7 +27,7 @@ hparam_domains['feature_type'] = hp.HParam('feature_type', hp.Discrete(['essenti
 hparam_domains['batch_size'] = hp.HParam('batch_size', hp.Discrete([32, 64, 128, 256, 512]))
 hparam_domains['classifier_activation'] = hp.HParam('classifier_activation', hp.Discrete(['linear', 'relu']))
 hparam_domains['final_activation'] = hp.HParam('final_activation', hp.Discrete(['linear', 'softmax', 'sigmoid']))
-hparam_domains['weights'] = hp.HParam('weights', hp.Discrete(['', 'MTT_musicnn_4class_transfer_learning', 'MSD_musicnn_4class_transfer_learning']))
+hparam_domains['weights'] = hp.HParam('weights', hp.Discrete(['', 'MTT_musicnn', 'MSD_musicnn']))
 hparam_domains['finetuning'] = hp.HParam('finetuning', hp.Discrete([True, False]))
 hparam_domains['optimizer'] = hp.HParam('optimizer', hp.Discrete(['Adam', 'SGD']))
 hparam_domains['learning_rate'] = hp.HParam('learning_rate', hp.Discrete([0.01, 0.001, 0.0001]))
@@ -113,9 +113,8 @@ def get_model(hparams, num_classes):
     from keras_audio_models.models import build_musicnn_classifier
 
     inputs = tf.keras.Input(shape=(hparams['num_frames'], hparams['mel_bands']), name='input')
-    model = build_musicnn_classifier(inputs, num_classes, 100, hparams['final_activation'])
+    model = build_musicnn_classifier(inputs, num_classes, 100, hparams['final_activation'], weights=hparams['weights'])
     model.get_layer('backend').logits.activation = tf.keras.activations.get(hparams['classifier_activation'])
-    model.load_weights('keras_audio_models/{}.h5'.format(hparams['weights']))
 
     if not hparams['finetuning']:
         model.get_layer('frontend').trainable = False
@@ -267,7 +266,7 @@ if __name__ == '__main__':
     model_config = parser.add_argument_group('Model options')
     model_config.add_argument('-c', '--classifier-activation', default=['relu'], action=ResetAppendAction, type=str, choices=hparam_domains['classifier_activation'].domain.values)
     model_config.add_argument('-a', '--final-activation', default=['softmax'], action=ResetAppendAction, type=str, choices=hparam_domains['final_activation'].domain.values)
-    model_config.add_argument('-w', '--weights', default=['MTT_musicnn_4class_transfer_learning'], action=ResetAppendAction, type=str, choices=hparam_domains['weights'].domain.values)
+    model_config.add_argument('-w', '--weights', default=['MTT_musicnn'], action=ResetAppendAction, type=str, choices=hparam_domains['weights'].domain.values)
     model_config.add_argument('--finetuning', default=[False], action=ResetAppendAction, type=lambda x: bool(distutils.util.strtobool(x)))
     model_config.add_argument('-o', '--optimizer', default=['Adam'], action=ResetAppendAction, type=str, choices=hparam_domains['optimizer'].domain.values)
     model_config.add_argument('-l', '--learning-rate', default=[0.001], action=ResetAppendAction, type=float)
