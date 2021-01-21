@@ -11,8 +11,9 @@ from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, LearningR
 from datetime import datetime
 import glob
 import os
-import distutils
+from distutils.util import strtobool
 from collections import Counter
+import tempfile
 
 
 # Hyperparameter domains
@@ -33,6 +34,7 @@ hparam_domains['optimizer'] = hp.HParam('optimizer', hp.Discrete(['Adam', 'SGD']
 hparam_domains['learning_rate'] = hp.HParam('learning_rate', hp.Discrete([0.01, 0.001, 0.0001]))
 
 METRIC_ACCURACY = 'sparse_categorical_accuracy'
+metric_name = tf.keras.metrics.get(METRIC_ACCURACY).__name__.replace('_', ' ')
 
 
 def write_hparam_domains(log_dir):
@@ -40,8 +42,12 @@ def write_hparam_domains(log_dir):
         with tf.summary.create_file_writer(log_dir, filename_suffix='.hparams.v2').as_default():
             hp.hparams_config(
                 hparams=list(hparam_domains.values()),
-                metrics=[hp.Metric(METRIC_ACCURACY, group='', display_name='Train Set Accuracy', dataset_type=hp.Metric.TRAINING), 
-                         hp.Metric('val_'+METRIC_ACCURACY, group='', display_name='Validation Set Accuracy', dataset_type=hp.Metric.VALIDATION),
+                metrics=[hp.Metric(METRIC_ACCURACY, group='', display_name=f'Train {metric_name.title()}', dataset_type=hp.Metric.TRAINING),
+                         hp.Metric('val_'+METRIC_ACCURACY, group='', display_name=f'Validation {metric_name.title()}', dataset_type=hp.Metric.VALIDATION),
+                         hp.Metric('train_soft_voting_'+METRIC_ACCURACY, group='', display_name=f'Train Soft Voting {metric_name.title()}', dataset_type=hp.Metric.TRAINING),
+                         hp.Metric('validation_soft_voting_'+METRIC_ACCURACY, group='', display_name=f'Validation Soft Voting {metric_name.title()}', dataset_type=hp.Metric.VALIDATION),
+                         hp.Metric('train_hard_voting_'+METRIC_ACCURACY, group='', display_name=f'Train Hard Voting {metric_name.title()}', dataset_type=hp.Metric.TRAINING),
+                         hp.Metric('validation_hard_voting_'+METRIC_ACCURACY, group='', display_name=f'Validation Hard Voting {metric_name.title()}', dataset_type=hp.Metric.VALIDATION),
                          hp.Metric('best_epoch', group='', display_name='Best Epoch', dataset_type=hp.Metric.VALIDATION)],
             )
 
@@ -91,11 +97,11 @@ def get_features(hparams):
 
         basedir = '/Users/johan/Datasets/Emotional guitar dataset'
         emotions = ['aggressive', 'happy', 'relaxed', 'sad']
-        performers = tf.constant(['LucTur', 'DavBen', 'OweWin', 'ValFui', 'AdoLaV', 'MatRig', 'TomCan', 'TizCam', 'SteRom', 'SimArm', 'SamLor', 'AleMar', 'MasChi', 'FilMel', 'GioAcq', 'TizBol', 'SalOli', 'FraSet', 'FedCer', 'CesSam', 'AntPao', 'DavRos', 'FraBen', 'GiaFer', 'GioDic', 'NicCon', 'AntDel', 'NicLat', 'LucFra', 'AngLoi', 'MarPia'])
+        performers = ['LucTur', 'DavBen', 'OweWin', 'ValFui', 'AdoLaV', 'MatRig', 'TomCan', 'TizCam', 'SteRom', 'SimArm', 'SamLor', 'AleMar', 'MasChi', 'FilMel', 'GioAcq', 'TizBol', 'SalOli', 'FraSet', 'FedCer', 'CesSam', 'AntPao', 'DavRos', 'FraBen', 'GiaFer', 'GioDic', 'NicCon', 'AntDel', 'NicLat', 'LucFra', 'AngLoi', 'MarPia']
         csv_ds = tf.data.experimental.CsvDataset(os.path.join(basedir, 'annotations_emotional_guitar_dataset.csv'), [tf.string, tf.string, tf.string], header=True, select_cols=[1, 2, 4])
         melspec_ds = csv_ds.apply(lambda ds: ds_filepath(ds, basedir)).apply(lambda ds: ds_melspectrogram_essentia(ds, hparams['samplerate'], hparams['frame_size'], hparams['step_size']))
-        emotion_ds = csv_ds.map(lambda filename, performer, emotion: emotion).apply(lambda ds: ds_value_encoder(ds, emotions))
-        performer_ds = csv_ds.map(lambda filename, performer, emotion: performer).apply(lambda ds: ds_value_encoder(ds, performers))
+        emotion_ds = csv_ds.map(lambda filename, performer, emotion: emotion).apply(lambda ds: ds_value_encoder(ds, tf.constant(emotions)))
+        performer_ds = csv_ds.map(lambda filename, performer, emotion: performer).apply(lambda ds: ds_value_encoder(ds, tf.constant(performers)))
 
         all_dict = {'features': melspec_ds, 'labels': emotion_ds, 'groups': performer_ds}
         train_ds_dict = ds_slice_dict(all_dict, 319)
@@ -130,7 +136,7 @@ def get_model(hparams, num_classes):
     return model
 
 
-def run_experiment(hparams, log_base_dir, exp_base_name):
+def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
     class_names, train_ds, val_ds = get_features(hparams)
     num_classes = len(class_names)
     model = get_model(hparams, num_classes)
@@ -175,14 +181,20 @@ def run_experiment(hparams, log_base_dir, exp_base_name):
     # from deepsuite.keras import ConfusionMatrixOnEpoch
     # confusion_matrix = ConfusionMatrixOnEpoch(log_dir, class_names, ['train', 'validation'])
     callbacks = [tensorboard, hyper_param_logger]#[, confusion_matrix, lrate],
+    tmp_weights_path = os.path.join(tempfile.gettempdir(), exp_name+'.h5')
     if val_ds is not None:
         earlystopper = EarlyStopping(monitor='val_'+METRIC_ACCURACY, patience=hparams['early_stopping_patience'], verbose=1, restore_best_weights=True)
-        checkpointer = ModelCheckpoint(exp_name+'.h5', monitor='val_'+METRIC_ACCURACY, verbose=1, save_best_only=True)
+        checkpointer = ModelCheckpoint(tmp_weights_path, monitor='val_'+METRIC_ACCURACY, verbose=1, save_best_only=True)
         callbacks += [earlystopper, checkpointer]
 
     results = model.fit(train_pipe, validation_data=val_pipe, epochs=hparams['epochs'], verbose=2, callbacks=callbacks)
-    if os.path.exists(exp_name+'.h5'):
-        model.load_weights(exp_name+'.h5') # when max epochs gets exceeded, early stopping callback doesn't load best model
+    if os.path.exists(tmp_weights_path):
+        model.load_weights(tmp_weights_path) # when max epochs gets exceeded, early stopping callback doesn't load best model
+    if save_model_dir:
+        save_path = os.path.join(save_model_dir, run_name+'.h5')
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        model.save_weights(save_path, save_format='h5')
+    os.remove(tmp_weights_path)
 
     def majority_voting(sliced_ds):
         soft_metrics = []
@@ -216,20 +228,19 @@ def run_experiment(hparams, log_base_dir, exp_base_name):
             tf.summary.scalar('val_'+name, val, step=0)
             print('The final model has achieved a {} of {:.3f} and a {} of {:.3f} at epoch {}'.format(name, train, 'val_'+name, val, best_epoch+1))
         train_conf = get_confusion_matrix(model, train_pipe, class_names, normalize=True, title='')
-        tf.summary.image('Train Set Confusion', mpl_fig_to_tf_image(train_conf), step=best_epoch)
+        tf.summary.image('Train Confusion', mpl_fig_to_tf_image(train_conf), step=best_epoch)
         val_conf = get_confusion_matrix(model, val_pipe, class_names, normalize=True, title='')
-        tf.summary.image('Validation Set Confusion', mpl_fig_to_tf_image(val_conf), step=best_epoch)
+        tf.summary.image('Validation Confusion', mpl_fig_to_tf_image(val_conf), step=best_epoch)
 
-        metric_name = tf.keras.metrics.get(METRIC_ACCURACY).__name__.replace('_', ' ')
         for sliced_ds, ds_name in [(train_sliced_ds, 'train'), (val_sliced_ds, 'validation')]:
             soft_metric, hard_metric, true_labels, soft_voting_labels, hard_voting_labels = majority_voting(sliced_ds)
-            tf.summary.scalar(f'{ds_name.title()} Soft Voting {metric_name.title()}', soft_metric, step=0)
-            tf.summary.scalar(f'{ds_name.title()} Hard Voting {metric_name.title()}', hard_metric, step=0)
+            tf.summary.scalar(f'{ds_name}_soft_voting_'+METRIC_ACCURACY, soft_metric, step=0)
+            tf.summary.scalar(f'{ds_name}_hard_voting_'+METRIC_ACCURACY, hard_metric, step=0)
             print(f'The final model has achieved a {ds_name} soft voting {metric_name} of {soft_metric:.3f} and a {ds_name} hard voting {metric_name} of {hard_metric:.3f} at epoch {best_epoch+1}')
-            soft_conf = plot_confusion_matrix(tf.math.confusion_matrix(true_labels, soft_voting_labels), class_names, normalize=True)
-            hard_conf = plot_confusion_matrix(tf.math.confusion_matrix(true_labels, hard_voting_labels), class_names, normalize=True)
-            tf.summary.image(f'{ds_name} Soft Voting Confusion', mpl_fig_to_tf_image(soft_conf), step=best_epoch)
-            tf.summary.image(f'{ds_name} Hard Voting Confusion', mpl_fig_to_tf_image(hard_conf), step=best_epoch)
+            soft_conf = plot_confusion_matrix(tf.math.confusion_matrix(true_labels, soft_voting_labels), class_names, normalize=True, title='')
+            hard_conf = plot_confusion_matrix(tf.math.confusion_matrix(true_labels, hard_voting_labels), class_names, normalize=True, title='')
+            tf.summary.image(f'{ds_name.title()} Soft Voting Confusion', mpl_fig_to_tf_image(soft_conf), step=best_epoch)
+            tf.summary.image(f'{ds_name.title()} Hard Voting Confusion', mpl_fig_to_tf_image(hard_conf), step=best_epoch)
         
         
 if __name__ == '__main__':
@@ -267,20 +278,22 @@ if __name__ == '__main__':
     model_config.add_argument('-c', '--classifier-activation', default=['relu'], action=ResetAppendAction, type=str, choices=hparam_domains['classifier_activation'].domain.values)
     model_config.add_argument('-a', '--final-activation', default=['softmax'], action=ResetAppendAction, type=str, choices=hparam_domains['final_activation'].domain.values)
     model_config.add_argument('-w', '--weights', default=['MTT_musicnn'], action=ResetAppendAction, type=str, choices=hparam_domains['weights'].domain.values)
-    model_config.add_argument('--finetuning', default=[False], action=ResetAppendAction, type=lambda x: bool(distutils.util.strtobool(x)))
-    model_config.add_argument('-o', '--optimizer', default=['Adam'], action=ResetAppendAction, type=str, choices=hparam_domains['optimizer'].domain.values)
-    model_config.add_argument('-l', '--learning-rate', default=[0.001], action=ResetAppendAction, type=float)
-    model_config.add_argument('-b', '--batch-size', default=[256], action=ResetAppendAction, type=int)
-    
+
     train_config = parser.add_argument_group('Training options')
 #     train_config.add_argument('--validation_split', default=[0.2], action=ResetAppendAction, type=float)
+    train_config.add_argument('-o', '--optimizer', default=['Adam'], action=ResetAppendAction, type=str, choices=hparam_domains['optimizer'].domain.values)
+    train_config.add_argument('-l', '--learning-rate', default=[0.001], action=ResetAppendAction, type=float)
+    train_config.add_argument('-b', '--batch-size', default=[256], action=ResetAppendAction, type=int)
     train_config.add_argument('-e', '--epochs', default=[100], action=ResetAppendAction, type=int)
-    train_config.add_argument('--early_stopping_patience', default=[30], action=ResetAppendAction, type=int)
+    train_config.add_argument('--early-stopping-patience', default=[30], action=ResetAppendAction, type=int)
+    train_config.add_argument('--save-model-dir', default='', action='store', type=str)
+    train_config.add_argument('--finetuning', default=[False], action=ResetAppendAction, type=lambda x: bool(strtobool(x)))
 
     args = vars(parser.parse_args())
+    save_model_dir = args.pop('save_model_dir')
     write_hparam_domains(log_dir)
 
     for param_combo in itertools.product(*args.values()):
         hparams = dict(zip(args.keys(), param_combo))
         print(f'Running parameter combination {", ".join(["{}: {}".format(k, v) for k, v in hparams.items()])}')
-        run_experiment(hparams, log_base_dir, exp_base_name)
+        run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir)
