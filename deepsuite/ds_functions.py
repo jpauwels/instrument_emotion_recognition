@@ -4,34 +4,34 @@ import tensorflow_io as tfio
 
 
 def ds_fix_length(ds, length, position='start', pad_mode='constant', pad_value='0', num_parallel_calls=tf.data.experimental.AUTOTUNE):
-    return ds.map(lambda audio, label: (tf_fix_length(audio, length, position, pad_mode, pad_value), label), num_parallel_calls)
+    return ds.map(lambda values: tf_fix_length(values, length, position, pad_mode, pad_value), num_parallel_calls)
 
 
 def ds_spectrogram(ds, fft_size, window_size, step_size, num_parallel_calls=tf.data.experimental.AUTOTUNE):
-    return ds.map(lambda samples, label: (tfio.experimental.audio.spectrogram(tf.squeeze(samples), fft_size, window_size, step_size, name='spectrogram'), label), num_parallel_calls)
+    return ds.map(lambda samples: tfio.experimental.audio.spectrogram(tf.squeeze(samples), fft_size, window_size, step_size, name='spectrogram'), num_parallel_calls)
 
 
 def ds_melscale(ds, samplerate, mel_bands, fmin, fmax, num_parallel_calls=tf.data.experimental.AUTOTUNE):
-    return ds.map(lambda magnitudes, label: (tfio.experimental.audio.melscale(magnitudes, samplerate, mel_bands, fmin, fmax, name='melscale'), label), num_parallel_calls)
+    return ds.map(lambda magnitudes: tfio.experimental.audio.melscale(magnitudes, samplerate, mel_bands, fmin, fmax, name='melscale'), num_parallel_calls)
 
 
 def ds_dbscale(ds, db_range=120, num_parallel_calls=tf.data.experimental.AUTOTUNE):
-    return ds.map(lambda values, label: (tfio.experimental.audio.dbscale(values, db_range, name='dbscale'), label), num_parallel_calls)
+    return ds.map(lambda values: tfio.experimental.audio.dbscale(values, db_range, name='dbscale'), num_parallel_calls)
 
 
 def ds_expand_channel(ds, num_parallel_calls=tf.data.experimental.AUTOTUNE):
-    return ds.map(lambda values, label: (tf.expand_dims(values, axis=-1), label), num_parallel_calls)
+    return ds.map(lambda values: tf.expand_dims(values, axis=-1), num_parallel_calls)
 
 
 def ds_zscore(ds, epsilon, num_parallel_calls=tf.data.experimental.AUTOTUNE):
-    return ds.map(lambda values, label: (tf_zscore(values, epsilon), label), num_parallel_calls)
+    return ds.map(lambda values: tf_zscore(values, epsilon), num_parallel_calls)
 
 
 def ds_resample(ds, requested_rate, rate=None, num_parallel_calls=tf.data.experimental.AUTOTUNE):
     if rate:
-        return ds.map(lambda samples, label: (tfio.audio.resample(samples, rate_in=tf.cast(rate, tf.int64), rate_out=requested_rate, name='resampler'), label), num_parallel_calls)
+        return ds.map(lambda samples: tfio.audio.resample(samples, rate_in=tf.cast(rate, tf.int64), rate_out=requested_rate, name='resampler'), num_parallel_calls)
     else:
-        return ds.map(lambda samples_rate, label: (tfio.audio.resample(samples_rate[0], rate_in=tf.cast(samples_rate[1], tf.int64), rate_out=requested_rate, name='resampler'), label), num_parallel_calls)
+        return ds.map(lambda samples_rate: tfio.audio.resample(samples_rate[0], rate_in=tf.cast(samples_rate[1], tf.int64), rate_out=requested_rate, name='resampler'), num_parallel_calls)
 
 
 def ds_melspectrogram_db(ds, src_samplerate, target_samplerate, fft_size, window_size, step_size, mel_bands, fmin=0, fmax=8000, db_range=80, epsilon=1e-10, num_parallel_calls=tf.data.experimental.AUTOTUNE):

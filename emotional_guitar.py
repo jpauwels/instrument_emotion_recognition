@@ -2,12 +2,14 @@
 from deepsuite.ds_functions import *
 from deepsuite.tf_functions import *
 from deepsuite.plotting import plot_confusion_matrix, mpl_fig_to_tf_image
-from deepsuite.keras_functions import get_confusion_matrix
+from deepsuite.keras_functions import get_pred_labels
 import tensorflow as tf
 import tensorflow_datasets as tfds
 import guitar_emotion_recognition
 from tensorboard.plugins.hparams import api as hp
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, LearningRateScheduler, TensorBoard
+from sklearn.model_selection import GroupShuffleSplit, GroupKFold
+import numpy as np
 from datetime import datetime
 import glob
 import os
@@ -34,33 +36,29 @@ hparam_domains['optimizer'] = hp.HParam('optimizer', hp.Discrete(['Adam', 'SGD']
 hparam_domains['learning_rate'] = hp.HParam('learning_rate', hp.Discrete([0.01, 0.001, 0.0001]))
 
 METRIC_ACCURACY = 'sparse_categorical_accuracy'
-metric_name = tf.keras.metrics.get(METRIC_ACCURACY).__name__.replace('_', ' ')
+accurary_name = tf.keras.metrics.get(METRIC_ACCURACY).__name__.replace('_', ' ')
 
 
 def write_hparam_domains(log_dir):
-    if not glob.glob(os.path.join(log_dir, '*.hparams.v2')):
-        with tf.summary.create_file_writer(log_dir, filename_suffix='.hparams.v2').as_default():
-            hp.hparams_config(
-                hparams=list(hparam_domains.values()),
-                metrics=[hp.Metric(METRIC_ACCURACY, group='', display_name=f'Train {metric_name.title()}', dataset_type=hp.Metric.TRAINING),
-                         hp.Metric('val_'+METRIC_ACCURACY, group='', display_name=f'Validation {metric_name.title()}', dataset_type=hp.Metric.VALIDATION),
-                         hp.Metric('train_soft_voting_'+METRIC_ACCURACY, group='', display_name=f'Train Soft Voting {metric_name.title()}', dataset_type=hp.Metric.TRAINING),
-                         hp.Metric('validation_soft_voting_'+METRIC_ACCURACY, group='', display_name=f'Validation Soft Voting {metric_name.title()}', dataset_type=hp.Metric.VALIDATION),
-                         hp.Metric('train_hard_voting_'+METRIC_ACCURACY, group='', display_name=f'Train Hard Voting {metric_name.title()}', dataset_type=hp.Metric.TRAINING),
-                         hp.Metric('validation_hard_voting_'+METRIC_ACCURACY, group='', display_name=f'Validation Hard Voting {metric_name.title()}', dataset_type=hp.Metric.VALIDATION),
-                         hp.Metric('best_epoch', group='', display_name='Best Epoch', dataset_type=hp.Metric.VALIDATION)],
-            )
+    for p in glob.glob(os.path.join(log_dir, '*.hparam_domains.v2')):
+        os.remove(p)
+    hparam_metrics = []
+    for split_name, split_type in (('validation', hp.Metric.VALIDATION), ('train', hp.Metric.TRAINING)):
+        hparam_metrics.append(hp.Metric(f'{split_name}.{METRIC_ACCURACY}', group='', display_name=f'{split_name.title()} {accurary_name.title()}', dataset_type=split_type))
+        hparam_metrics.append(hp.Metric(f'{split_name}.{METRIC_ACCURACY}_std', group='', display_name=f'{split_name.title()} {accurary_name.title()} StDev', dataset_type=split_type))
+        hparam_metrics.append(hp.Metric(f'{split_name}.soft_voting_{METRIC_ACCURACY}', group='', display_name=f'{split_name.title()} Soft Voting {accurary_name.title()}', dataset_type=split_type))
+        hparam_metrics.append(hp.Metric(f'{split_name}.soft_voting_{METRIC_ACCURACY}_std', group='', display_name=f'{split_name.title()} Soft Voting {accurary_name.title()} StDev', dataset_type=split_type))
+        hparam_metrics.append(hp.Metric(f'{split_name}.hard_voting_{METRIC_ACCURACY}', group='', display_name=f'{split_name.title()} Hard Voting {accurary_name.title()}', dataset_type=split_type))
+        hparam_metrics.append(hp.Metric(f'{split_name}.hard_voting_{METRIC_ACCURACY}_std', group='', display_name=f'{split_name.title()} Hard Voting {accurary_name.title()} StDev', dataset_type=split_type))
+    hparam_metrics.append(hp.Metric('best_epoch', group='', display_name='Best Epoch', dataset_type=hp.Metric.VALIDATION))
+    with tf.summary.create_file_writer(log_dir, filename_suffix='.hparam_domains.v2').as_default():
+        hp.hparams_config(hparams=list(hparam_domains.values()), metrics=hparam_metrics)
 
 
-def get_features(hparams):
+def get_features(hparams, paths, labels, train_indices, val_indices):
     if hparams['feature_type'] == 'tfds':
-        raw_train_ds, ds_info = tfds.load('guitar_emotion_recognition', split='train', shuffle_files=True, with_info=True, as_supervised=True)
-        raw_val_ds = tfds.load('guitar_emotion_recognition', split='validation', shuffle_files=False, with_info=False, as_supervised=True)
-        emotions = ds_info.features['emotion'].names
-
-        train_ds = raw_train_ds.apply(lambda ds: ds_melspectrogram_db(ds, ds_info.features['audio'].sample_rate, hparams['samplerate'], hparams['frame_size'], hparams['frame_size'], hparams['step_size'], hparams['mel_bands']))
-        val_ds = raw_val_ds.apply(lambda ds: ds_melspectrogram_db(ds, ds_info.features['audio'].sample_rate, hparams['samplerate'], hparams['frame_size'], hparams['frame_size'], hparams['step_size'], hparams['mel_bands']))
-        # test_ds = raw_test_ds.apply(lambda ds: ds_melspectrogram_db(ds, ds_info.features['audio'].sample_rate, hparams['samplerate'], hparams['frame_size'], hparams['frame_size'], hparams['step_size'], hparams['mel_bands'])).apply(lambda ds: ds_time_slicer(ds, hparams['num_frames'], 0))
+        train_ds = tfds.load('guitar_emotion_recognition', split='train', shuffle_files=True, with_info=False, as_supervised=True)
+        val_ds = tfds.load('guitar_emotion_recognition', split='validation', shuffle_files=False, with_info=False, as_supervised=True)
 
     elif hparams['feature_type'] == 'essentia':
          
@@ -81,13 +79,6 @@ def get_features(hparams):
             essentia.run(loader)
             return pool['melbands']
 
-
-        def ds_filepath(ds, basedir, num_parallel_calls=tf.data.experimental.AUTOTUNE):
-            def tf_filepath(basedir, filename):
-                return tf.strings.join([basedir, '/emotional_guitar_dataset/', filename])
-            return ds.map(lambda filename, performer, emotion: tf_filepath(basedir, filename), num_parallel_calls)
-
-
         def ds_melspectrogram_essentia(ds, samplerate, frame_size, step_size, num_parallel_calls=tf.data.experimental.AUTOTUNE):
             def tf_melspectrogram_essentia(path, samplerate, frame_size, step_size):
                 melbands, = tf.py_function(tf_datatype_wrapper(melspectrogram_essentia), [path, samplerate, frame_size, step_size], [tf.float32])
@@ -95,32 +86,23 @@ def get_features(hparams):
                 return melbands
             return ds.map(lambda path: tf_melspectrogram_essentia(path, samplerate, frame_size, step_size), num_parallel_calls)
 
-        basedir = '/Users/johan/Datasets/Emotional guitar dataset'
-        emotions = ['aggressive', 'happy', 'relaxed', 'sad']
-        performers = ['LucTur', 'DavBen', 'OweWin', 'ValFui', 'AdoLaV', 'MatRig', 'TomCan', 'TizCam', 'SteRom', 'SimArm', 'SamLor', 'AleMar', 'MasChi', 'FilMel', 'GioAcq', 'TizBol', 'SalOli', 'FraSet', 'FedCer', 'CesSam', 'AntPao', 'DavRos', 'FraBen', 'GiaFer', 'GioDic', 'NicCon', 'AntDel', 'NicLat', 'LucFra', 'AngLoi', 'MarPia']
-        csv_ds = tf.data.experimental.CsvDataset(os.path.join(basedir, 'annotations_emotional_guitar_dataset.csv'), [tf.string, tf.string, tf.string], header=True, select_cols=[1, 2, 4])
-        melspec_ds = csv_ds.apply(lambda ds: ds_filepath(ds, basedir)).apply(lambda ds: ds_melspectrogram_essentia(ds, hparams['samplerate'], hparams['frame_size'], hparams['step_size']))
-        emotion_ds = csv_ds.map(lambda filename, performer, emotion: emotion).apply(lambda ds: ds_value_encoder(ds, tf.constant(emotions)))
-        performer_ds = csv_ds.map(lambda filename, performer, emotion: performer).apply(lambda ds: ds_value_encoder(ds, tf.constant(performers)))
-
-        all_dict = {'features': melspec_ds, 'labels': emotion_ds, 'groups': performer_ds}
-        train_ds_dict = ds_slice_dict(all_dict, 319)
-        val_ds_dict = ds_slice_dict(all_dict, 84, 319)
-        train_ds = ds_supervised_pair(train_ds_dict, 'features', 'labels').cache()
-        val_ds = ds_supervised_pair(val_ds_dict, 'features', 'labels').cache()
-
+        train_features_ds = tf.data.Dataset.from_tensor_slices(paths[train_indices]).apply(lambda ds: ds_melspectrogram_essentia(ds, hparams['samplerate'], hparams['frame_size'], hparams['step_size']))
+        val_features_ds = tf.data.Dataset.from_tensor_slices(paths[val_indices]).apply(lambda ds: ds_melspectrogram_essentia(ds, hparams['samplerate'], hparams['frame_size'], hparams['step_size']))
+        train_labels_ds = tf.data.Dataset.from_tensor_slices(labels[train_indices])
+        val_labels_ds = tf.data.Dataset.from_tensor_slices(labels[val_indices])
+        train_ds = tf.data.Dataset.zip((train_features_ds, train_labels_ds))
+        val_ds = tf.data.Dataset.zip((val_features_ds, val_labels_ds))
     else:
         raise ValueError('Unknown feature type "{}"'.format(hparams['feature_type']))
         
-    return emotions, train_ds, val_ds
+    return train_ds, val_ds
 
 
 def get_model(hparams, num_classes):
     from keras_audio_models.models import build_musicnn_classifier
 
     inputs = tf.keras.Input(shape=(hparams['num_frames'], hparams['mel_bands']), name='input')
-    model = build_musicnn_classifier(inputs, num_classes, 100, hparams['final_activation'], weights=hparams['weights'])
-    model.get_layer('backend').logits.activation = tf.keras.activations.get(hparams['classifier_activation'])
+    model = build_musicnn_classifier(inputs, num_classes, 100, hparams['classifier_activation'], hparams['final_activation'], weights=hparams['weights'])
 
     if not hparams['finetuning']:
         model.get_layer('frontend').trainable = False
@@ -136,113 +118,198 @@ def get_model(hparams, num_classes):
     return model
 
 
-def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
-    class_names, train_ds, val_ds = get_features(hparams)
-    num_classes = len(class_names)
-    model = get_model(hparams, num_classes)
-    
+def majority_voting(model, sliced_ds):
+    soft_metrics = []
+    hard_metrics = []
+    soft_voting_labels = []
+    hard_voting_labels = []
+    # true_labels = tf.concat((*nonsliced_ds.map(lambda _, label: label),), axis=0)
+    true_labels = []
+    metric = tf.keras.metrics.get(METRIC_ACCURACY)
+    for file_slices in sliced_ds:
+        true_label = next(iter(file_slices))[1].numpy()
+        file_results = model.predict(file_slices.batch(hparams['batch_size']), verbose=0)
+        soft_results = file_results.mean(axis=0)
+        hard_metrics.append(tf.reduce_mean(metric(y_true=tf.repeat(true_label, file_results.shape[0]), y_pred=file_results)))
+        soft_metrics.append(metric(y_true=true_label, y_pred=soft_results))
+        true_labels.append(true_label)
+        soft_voting_labels.append(soft_results.argmax())
+        hard_voting_labels.append(next(Counter(file_results.argmax(axis=1)).elements()))
+    hard_metric = tf.reduce_mean(hard_metrics).numpy()
+    soft_metric = tf.reduce_mean(soft_metrics).numpy()
+    return soft_metric, hard_metric, true_labels, soft_voting_labels, hard_voting_labels
+
+
+def fit_model(model, exp_name, log_dir, save_model_dir, train_ds, val_ds, log_suffix=''):
+
     def ds_step_slicer(ds, num_features, slice_length, start=-1, num_parallel_calls=tf.data.experimental.AUTOTUNE):
-        return ds.map(lambda group_idx, tensor_label: (group_idx, slice_steps_to_ds(*tensor_label, num_features, slice_length, start)), num_parallel_calls=num_parallel_calls)
+        return ds.map(lambda tensor, label: slice_steps_to_ds(tensor, label, num_features, slice_length, start), num_parallel_calls=num_parallel_calls)
 
-    def select_2nd(first, second):
-        return second
+    sliced_ds = {'train': train_ds.cache().apply(lambda ds: ds_step_slicer(ds, hparams['mel_bands'], hparams['num_frames'], -1))}
 
-    train_cardinality = train_ds.cardinality().numpy()
+    train_cardinality = sliced_ds['train'].flat_map(lambda x: x).cardinality().numpy()
     if train_cardinality == tf.data.INFINITE_CARDINALITY or train_cardinality == tf.data.UNKNOWN_CARDINALITY or train_cardinality < 0:
-        train_cardinality = 2500
+        train_cardinality = 3000
     
-    train_sliced_ds = train_ds.enumerate().apply(lambda ds: ds_step_slicer(ds, hparams['mel_bands'], hparams['num_frames'], -1))
-    train_pipe = train_sliced_ds\
-        .flat_map(select_2nd)\
+    train_pipe = sliced_ds['train']\
+        .flat_map(lambda x: x)\
         .shuffle(train_cardinality)\
         .batch(hparams['batch_size'])\
         .prefetch(tf.data.experimental.AUTOTUNE)
     if val_ds is not None:
-        val_sliced_ds = val_ds.enumerate().apply(lambda ds: ds_step_slicer(ds, hparams['mel_bands'], hparams['num_frames'], 0)).cache()
-        val_pipe = val_sliced_ds\
-            .flat_map(select_2nd)\
+        sliced_ds['validation'] = val_ds.apply(lambda ds: ds_step_slicer(ds, hparams['mel_bands'], hparams['num_frames'], 0)).cache()
+        val_pipe = sliced_ds['validation']\
+            .flat_map(lambda x: x)\
             .batch(hparams['batch_size'])\
             .cache()\
             .prefetch(tf.data.experimental.AUTOTUNE)
     else:
         val_pipe = None
 
-    exp_name = os.path.join(exp_base_name, model.name)
-    run_name = exp_name+'-'+datetime.now().strftime("%y%m%d-%H%M%S")
-    log_dir = os.path.join(log_base_dir, run_name)
-    os.makedirs(os.path.dirname(exp_name), exist_ok=True)
+    os.makedirs(os.path.dirname(log_dir), exist_ok=True)
 
-    tensorboard = TensorBoard(log_dir=log_dir, profile_batch=2)
-    hparam_writer = tf.summary.create_file_writer(log_dir, filename_suffix='.hparams.v2')
-    hyper_param_logger = hp.KerasCallback(hparam_writer, hparams, trial_id=run_name)
+    tensorboard = TensorBoard(log_dir=log_dir+log_suffix, profile_batch=0)
     # exp_decay = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=0.001, decay_steps=15, decay_rate=0.4, staircase=True)
     # pcwconst_decay = tf.keras.optimizers.schedules.PiecewiseConstantDecay([13, 28, 43, 58], [0.001, 0.0004, 0.00016, 6.4e-5, 4e-5])
     # lrate = LearningRateScheduler(pcwconst_decay, verbose=1)
     # from deepsuite.keras import ConfusionMatrixOnEpoch
     # confusion_matrix = ConfusionMatrixOnEpoch(log_dir, class_names, ['train', 'validation'])
-    callbacks = [tensorboard, hyper_param_logger]#[, confusion_matrix, lrate],
-    tmp_weights_path = os.path.join(tempfile.gettempdir(), exp_name+'.h5')
+    callbacks = [tensorboard]#[, confusion_matrix, lrate],
+    tmp_weights_path = os.path.join(tempfile.gettempdir(), exp_name+log_suffix+'.h5')
     if val_ds is not None:
         earlystopper = EarlyStopping(monitor='val_'+METRIC_ACCURACY, patience=hparams['early_stopping_patience'], verbose=1, restore_best_weights=True)
         checkpointer = ModelCheckpoint(tmp_weights_path, monitor='val_'+METRIC_ACCURACY, verbose=1, save_best_only=True)
         callbacks += [earlystopper, checkpointer]
 
-    results = model.fit(train_pipe, validation_data=val_pipe, epochs=hparams['epochs'], verbose=2, callbacks=callbacks)
+    fit_log = model.fit(train_pipe, validation_data=val_pipe, epochs=hparams['epochs'], verbose=2, callbacks=callbacks)
     if os.path.exists(tmp_weights_path):
         model.load_weights(tmp_weights_path) # when max epochs gets exceeded, early stopping callback doesn't load best model
+        os.remove(tmp_weights_path)
     if save_model_dir:
-        save_path = os.path.join(save_model_dir, run_name+'.h5')
+        save_path = os.path.join(save_model_dir, exp_name+log_suffix+'.h5')
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        model.save_weights(save_path, save_format='h5')
-    os.remove(tmp_weights_path)
+        model.save(save_path, save_format='h5')
 
-    def majority_voting(sliced_ds):
-        soft_metrics = []
-        hard_metrics = []
-        soft_voting_labels = []
-        hard_voting_labels = []
-        # true_labels = tf.concat((*nonsliced_ds.map(lambda _, label: label),), axis=0)
-        true_labels = []
-        metric = tf.keras.metrics.get(METRIC_ACCURACY)
-        for _, file_slices in sliced_ds:
-            true_label = next(iter(file_slices))[1].numpy()
-            file_results = model.predict(file_slices.batch(hparams['batch_size']), verbose=0)
-            soft_results = file_results.mean(axis=0)
-            hard_metrics.append(tf.reduce_mean(metric(y_true=tf.repeat(true_label, file_results.shape[0]), y_pred=file_results)))
-            soft_metrics.append(metric(y_true=true_label, y_pred=soft_results))
-            true_labels.append(true_label)
-            soft_voting_labels.append(soft_results.argmax())
-            hard_voting_labels.append(next(Counter(file_results.argmax(axis=1)).elements()))
-        hard_metric = tf.reduce_mean(hard_metrics).numpy()
-        soft_metric = tf.reduce_mean(soft_metrics).numpy()
-        return soft_metric, hard_metric, true_labels, soft_voting_labels, hard_voting_labels
+    eval_results = {'train': model.evaluate(train_pipe, verbose=0)}
+    conf_mat = {'train': tf.math.confusion_matrix(*get_pred_labels(model, train_pipe))}
+    if val_ds is not None:
+        best_epoch = fit_log.history[earlystopper.monitor].index(earlystopper.best)
+        eval_results['validation'] = model.evaluate(val_pipe, verbose=0)
+        conf_mat['validation'] = tf.math.confusion_matrix(*get_pred_labels(model, val_pipe))
+    else:
+        best_epoch = hparams['epochs']
 
-    # Write best model summaries
+    majority_eval_results = {}
+    majority_conf_mat = {}
+    for name, ds in sliced_ds.items():
+        soft_metric, hard_metric, true_labels, soft_voting_labels, hard_voting_labels = majority_voting(model, ds)
+        majority_eval_results[name] = soft_metric, hard_metric
+        soft_conf = tf.math.confusion_matrix(true_labels, soft_voting_labels)
+        hard_conf = tf.math.confusion_matrix(true_labels, hard_voting_labels)
+        majority_conf_mat[name] = soft_conf, hard_conf
+
+    return best_epoch, eval_results, conf_mat, majority_eval_results, majority_conf_mat
+
+
+def write_log(log_dir, hparams, exp_name, class_names, metrics_names, best_epoch, eval_results, conf_mat, majority_eval_results, majority_conf_mat, eval_stdev=None, majority_stdev=None):
     with tf.summary.create_file_writer(log_dir, filename_suffix='.final.v2').as_default():
-        best_epoch = results.history[earlystopper.monitor].index(earlystopper.best)
-        tf.summary.scalar('best_epoch', best_epoch, step=0)
-        results_train = model.evaluate(train_pipe, verbose=0)
-        results_val = model.evaluate(val_pipe, verbose=0)
-        for name, train, val in zip(model.metrics_names, results_train, results_val):
-            tf.summary.scalar(name, train, step=0)
-            tf.summary.scalar('val_'+name, val, step=0)
-            print('The final model has achieved a {} of {:.3f} and a {} of {:.3f} at epoch {}'.format(name, train, 'val_'+name, val, best_epoch+1))
-        train_conf = get_confusion_matrix(model, train_pipe, class_names, normalize=True, title='')
-        tf.summary.image('Train Confusion', mpl_fig_to_tf_image(train_conf), step=best_epoch)
-        val_conf = get_confusion_matrix(model, val_pipe, class_names, normalize=True, title='')
-        tf.summary.image('Validation Confusion', mpl_fig_to_tf_image(val_conf), step=best_epoch)
+        hp.hparams(hparams, trial_id=exp_name)
+        if best_epoch is not None:
+            tf.summary.scalar('best_epoch', best_epoch, step=0)
+        else:
+            best_epoch = 0
 
-        for sliced_ds, ds_name in [(train_sliced_ds, 'train'), (val_sliced_ds, 'validation')]:
-            soft_metric, hard_metric, true_labels, soft_voting_labels, hard_voting_labels = majority_voting(sliced_ds)
-            tf.summary.scalar(f'{ds_name}_soft_voting_'+METRIC_ACCURACY, soft_metric, step=0)
-            tf.summary.scalar(f'{ds_name}_hard_voting_'+METRIC_ACCURACY, hard_metric, step=0)
-            print(f'The final model has achieved a {ds_name} soft voting {metric_name} of {soft_metric:.3f} and a {ds_name} hard voting {metric_name} of {hard_metric:.3f} at epoch {best_epoch+1}')
-            soft_conf = plot_confusion_matrix(tf.math.confusion_matrix(true_labels, soft_voting_labels), class_names, normalize=True, title='')
-            hard_conf = plot_confusion_matrix(tf.math.confusion_matrix(true_labels, hard_voting_labels), class_names, normalize=True, title='')
-            tf.summary.image(f'{ds_name.title()} Soft Voting Confusion', mpl_fig_to_tf_image(soft_conf), step=best_epoch)
-            tf.summary.image(f'{ds_name.title()} Hard Voting Confusion', mpl_fig_to_tf_image(hard_conf), step=best_epoch)
+        for split_name, results in eval_results.items():
+            for metric_name, value in zip(metrics_names, results):
+                try:
+                    tf.summary.scalar(f'{split_name}.{metric_name}', value[0], step=0)
+                    tf.summary.scalar(f'{split_name}.{metric_name}_std', value[1], step=0)
+                    print('The final model has achieved a {} of {:.3f} +/- {:.3f}'.format(metric_name, *value))
+                except TypeError:
+                    tf.summary.scalar(f'{split_name}.{metric_name}', value, step=0)
+                    print('The final model has achieved a {} of {:.3f} at epoch {}'.format(metric_name, value, best_epoch+1))
+
+        for split_name, conf in conf_mat.items():
+            tf.summary.image(f'{split_name.title()} Confusion', mpl_fig_to_tf_image(plot_confusion_matrix(conf, class_names, normalize=True, title='')), step=best_epoch)
+
+        for split_name, (soft_metric, hard_metric) in majority_eval_results.items():
+            try:
+                tf.summary.scalar(f'{split_name}.soft_voting_{METRIC_ACCURACY}', soft_metric[0], step=0)
+                tf.summary.scalar(f'{split_name}.soft_voting_{METRIC_ACCURACY}_std', soft_metric[1], step=0)
+                tf.summary.scalar(f'{split_name}.hard_voting_{METRIC_ACCURACY}', hard_metric[0], step=0)
+                tf.summary.scalar(f'{split_name}.hard_voting_{METRIC_ACCURACY}_std', hard_metric[1], step=0)
+                print(f'The final model has achieved a {split_name} soft voting {accurary_name} of {soft_metric[0]:.3f} +/- {soft_metric[1]:.3f} and a {split_name} hard voting {accurary_name} of {hard_metric[0]:.3f} +/- {hard_metric[1]:.3f}')
+            except IndexError:
+                tf.summary.scalar(f'{split_name}.soft_voting_{METRIC_ACCURACY}', soft_metric, step=0)
+                tf.summary.scalar(f'{split_name}.hard_voting_{METRIC_ACCURACY}', hard_metric, step=0)
+                print(f'The final model has achieved a {split_name} soft voting {accurary_name} of {soft_metric:.3f} and a {split_name} hard voting {accurary_name} of {hard_metric:.3f} at epoch {best_epoch+1}')
         
-        
+        for split_name, (soft_conf, hard_conf) in majority_conf_mat.items():
+            tf.summary.image(f'{split_name.title()} Soft Voting Confusion', mpl_fig_to_tf_image(plot_confusion_matrix(soft_conf, class_names, normalize=True, title='')), step=best_epoch)
+            tf.summary.image(f'{split_name.title()} Hard Voting Confusion', mpl_fig_to_tf_image(plot_confusion_matrix(hard_conf, class_names, normalize=True, title='')), step=best_epoch)
+
+
+# def clone_model_weights(model):
+#     from copy import deepcopy
+#     model_copy = tf.keras.models.clone_model(model)
+#     if not model.get_layer('frontend').trainable:
+#         model_copy.get_layer('backend').bn_flat_pool.trainable = False
+#         model_copy.get_layer('backend').penultimate.trainable = False
+#         model_copy.get_layer('backend').bn_penultimate.trainable = False
+#     model_copy.compile(optimizer=deepcopy(model.optimizer), loss=deepcopy(model.loss), metrics=deepcopy(model.compiled_metrics._metrics))
+#     model_copy.set_weights(model.get_weights())
+#     return model_copy
+
+
+def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
+    def ds_filepath(ds, basedir, num_parallel_calls=tf.data.experimental.AUTOTUNE):
+        def tf_filepath(basedir, filename):
+            return tf.strings.join([basedir, '/emotional_guitar_dataset/', filename])
+        return ds.map(lambda filename, performer, emotion: tf_filepath(basedir, filename), num_parallel_calls)
+
+    basedir = '/Users/johan/Datasets/Emotional guitar dataset'
+    class_names = ['aggressive', 'happy', 'relaxed', 'sad']
+    performers = ['LucTur', 'DavBen', 'OweWin', 'ValFui', 'AdoLaV', 'MatRig', 'TomCan', 'TizCam', 'SteRom', 'SimArm', 'SamLor', 'AleMar', 'MasChi', 'FilMel', 'GioAcq', 'TizBol', 'SalOli', 'FraSet', 'FedCer', 'CesSam', 'AntPao', 'DavRos', 'FraBen', 'GiaFer', 'GioDic', 'NicCon', 'AntDel', 'NicLat', 'LucFra', 'AngLoi', 'MarPia']
+    csv_ds = tf.data.experimental.CsvDataset(os.path.join(basedir, 'emotional_guitar_dataset/annotations_emotional_guitar_dataset.csv'), [tf.string, tf.string, tf.string], header=True, select_cols=[1, 2, 4])
+    paths = np.array([p.decode() for p in csv_ds.apply(lambda ds: ds_filepath(ds, basedir)).as_numpy_iterator()])
+    labels = np.array(list(csv_ds.map(lambda filename, performer, emotion: emotion).apply(lambda ds: ds_value_encoder(ds, tf.constant(class_names))).as_numpy_iterator()))
+    groups = np.array(list(csv_ds.map(lambda filename, performer, emotion: performer).apply(lambda ds: ds_value_encoder(ds, tf.constant(performers))).as_numpy_iterator()))
+
+    exp_name = os.path.join(exp_base_name, datetime.now().strftime("%y%m%d-%H%M%S"))
+    log_dir = os.path.join(log_base_dir, exp_name)
+
+    if hparams['validation_split']:
+        train_indices, val_indices = next(GroupShuffleSplit(n_splits=1, test_size=hparams['validation_split'], random_state=hparams['split_seed']).split(paths, labels, groups))
+        train_ds, val_ds = get_features(hparams, paths, labels, train_indices, val_indices)
+        model = get_model(hparams, len(class_names))
+        model_output = fit_model(model, exp_name, log_dir, save_model_dir, train_ds, val_ds)
+        write_log(log_dir, hparams, exp_name, class_names, model.metrics_names, *model_output)
+
+    elif hparams['num_folds']:
+        fold_outputs = []
+        fold_splitter = GroupKFold(n_splits=hparams['num_folds'])
+        if not hparams['finetuning']:
+            init_model = get_model(hparams, len(class_names))
+        for train_indices, val_indices in fold_splitter.split(paths, labels, groups):
+            train_ds, val_ds = get_features(hparams, paths, labels, train_indices, val_indices)
+            fold_suffix = f'/fold{len(fold_outputs)+1}'
+            if hparams['finetuning']:
+                fold_model = get_model({**hparams, 'weights': hparams['weights']+fold_suffix}, len(class_names))
+            else:
+                fold_model = get_model(hparams, len(class_names))
+                fold_model.set_weights(init_model.get_weights())
+            fold_outputs.append(fit_model(fold_model, exp_name, log_dir, save_model_dir, train_ds, val_ds, log_suffix=fold_suffix))
+        _, fold_results, fold_conf_mats, fold_majority_eval_results, fold_majority_conf_mat = zip(*fold_outputs)
+        mean_eval_results = {split: list(zip(np.mean(np.stack([f[split] for f in fold_results]), axis=0), 
+                                             np.std(np.stack([f[split] for f in fold_results]), axis=0))) for split in fold_results[0].keys()}
+        sum_conf_mat = {split: tf.reduce_sum([f[split] for f in fold_conf_mats], axis=0) for split in fold_conf_mats[0].keys()}
+        mean_majority_eval_results = {split: list(zip(np.mean(np.stack([f[split] for f in fold_majority_eval_results]), axis=0),
+                                                      np.std(np.stack([f[split] for f in fold_majority_eval_results]), axis=0))) for split in fold_majority_eval_results[0].keys()}
+        sum_majority_conf_mat = {split: [v for v in tf.reduce_sum([f[split] for f in fold_majority_conf_mat], axis=0)] for split in fold_majority_conf_mat[0].keys()}
+        write_log(log_dir, hparams, exp_name, class_names, fold_model.metrics_names, None, mean_eval_results, sum_conf_mat, mean_majority_eval_results, sum_majority_conf_mat)
+
+
+
 if __name__ == '__main__':
     
     import argparse
@@ -250,7 +317,15 @@ if __name__ == '__main__':
     
     log_base_dir = os.path.expanduser('~/private/tensorboard')
     exp_base_name = os.path.splitext(os.path.basename(__file__))[0]
-    log_dir = os.path.join(log_base_dir, exp_base_name)
+
+    def list_saved_models(save_model_dir, exp_base_name):
+        d = os.path.join(save_model_dir, exp_base_name)
+        try:
+            return [os.path.join('..', d, x) for x in os.listdir(d) if os.path.isdir(os.path.join(d, x)) or os.path.splitext(x)[1] == '.h5']
+        except FileNotFoundError:
+            return []
+
+    hparam_domains['weights'] = hp.HParam('weights', hp.Discrete(hparam_domains['weights'].domain.values + list_saved_models('saved-models', exp_base_name)))
 
     class ResetAppendAction(argparse._AppendAction):
         def __init__(self, option_strings, dest, **kwargs):
@@ -280,7 +355,9 @@ if __name__ == '__main__':
     model_config.add_argument('-w', '--weights', default=['MTT_musicnn'], action=ResetAppendAction, type=str, choices=hparam_domains['weights'].domain.values)
 
     train_config = parser.add_argument_group('Training options')
-#     train_config.add_argument('--validation_split', default=[0.2], action=ResetAppendAction, type=float)
+    train_config.add_argument('--validation-split', default=[0], action=ResetAppendAction, type=float)
+    train_config.add_argument('--num-folds', default=[0], action=ResetAppendAction, type=int)
+    train_config.add_argument('--split-seed', default=[0], action=ResetAppendAction, type=int)
     train_config.add_argument('-o', '--optimizer', default=['Adam'], action=ResetAppendAction, type=str, choices=hparam_domains['optimizer'].domain.values)
     train_config.add_argument('-l', '--learning-rate', default=[0.001], action=ResetAppendAction, type=float)
     train_config.add_argument('-b', '--batch-size', default=[256], action=ResetAppendAction, type=int)
@@ -291,7 +368,7 @@ if __name__ == '__main__':
 
     args = vars(parser.parse_args())
     save_model_dir = args.pop('save_model_dir')
-    write_hparam_domains(log_dir)
+    write_hparam_domains(os.path.join(log_base_dir, exp_base_name))
 
     for param_combo in itertools.product(*args.values()):
         hparams = dict(zip(args.keys(), param_combo))
