@@ -267,6 +267,8 @@ def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
             return tf.strings.join([basedir, '/emotional_guitar_dataset/', filename])
         return ds.map(lambda filename, performer, emotion: tf_filepath(basedir, filename), num_parallel_calls)
 
+    tf.random.set_seed(hparams['tf_seed'])
+
     basedir = '/Users/johan/Datasets/Emotional guitar dataset'
     class_names = ['aggressive', 'relaxed', 'happy', 'sad']
     performers = ['LucTur', 'DavBen', 'OweWin', 'ValFui', 'AdoLaV', 'MatRig', 'TomCan', 'TizCam', 'SteRom', 'SimArm', 'SamLor', 'AleMar', 'MasChi', 'FilMel', 'GioAcq', 'TizBol', 'SalOli', 'FraSet', 'FedCer', 'CesSam', 'AntPao', 'DavRos', 'FraBen', 'GiaFer', 'GioDic', 'NicCon', 'AntDel', 'NicLat', 'LucFra', 'AngLoi', 'MarPia']
@@ -348,7 +350,7 @@ if __name__ == '__main__':
     features_config.add_argument('-f', '--frame-size', default=[512], action=ResetAppendAction, type=int)
     features_config.add_argument('-s', '--step-size', default=[256], action=ResetAppendAction, type=int)
     features_config.add_argument('-t', '--feature-type', default=['essentia'], action=ResetAppendAction, type=str, choices=hparam_domains['feature_type'].domain.values)
-    
+
     model_config = parser.add_argument_group('Model options')
     model_config.add_argument('-c', '--classifier-activation', default=['relu'], action=ResetAppendAction, type=str, choices=hparam_domains['classifier_activation'].domain.values)
     model_config.add_argument('-a', '--final-activation', default=['softmax'], action=ResetAppendAction, type=str, choices=hparam_domains['final_activation'].domain.values)
@@ -358,6 +360,7 @@ if __name__ == '__main__':
     train_config.add_argument('--validation-split', default=[0], action=ResetAppendAction, type=float)
     train_config.add_argument('--num-folds', default=[0], action=ResetAppendAction, type=int)
     train_config.add_argument('--split-seed', default=[0], action=ResetAppendAction, type=int)
+    train_config.add_argument('--tf-seed', default=[0], action=ResetAppendAction, type=int)
     train_config.add_argument('-o', '--optimizer', default=['Adam'], action=ResetAppendAction, type=str, choices=hparam_domains['optimizer'].domain.values)
     train_config.add_argument('-l', '--learning-rate', default=[0.001], action=ResetAppendAction, type=float)
     train_config.add_argument('-b', '--batch-size', default=[256], action=ResetAppendAction, type=int)
