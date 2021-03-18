@@ -20,6 +20,7 @@ import random
 import string
 from collections import Counter
 import tempfile
+import pickle
 
 tfdata_parallel = tf.data.experimental.AUTOTUNE
 tf.data.experimental.enable_debug_mode()
@@ -129,6 +130,7 @@ def majority_voting(hparams, model, sliced_ds):
     hard_voting_labels = []
     # true_labels = tf.concat((*nonsliced_ds.map(lambda _, label: label),), axis=0)
     true_labels = []
+    pred_labels = []
     metric = tf.keras.metrics.get(METRIC_ACCURACY)
     for file_slices in sliced_ds:
         true_label = next(iter(file_slices))[1]
@@ -137,11 +139,12 @@ def majority_voting(hparams, model, sliced_ds):
         hard_metrics.append(tf.reduce_mean(metric(y_true=tf.repeat(true_label, file_results.shape[0]), y_pred=file_results)))
         soft_metrics.append(metric(y_true=true_label, y_pred=soft_results))
         true_labels.append(true_label)
+        pred_labels.append(file_results)
         soft_voting_labels.append(soft_results.argmax())
         hard_voting_labels.append(next(Counter(file_results.argmax(axis=1)).elements()))
     hard_metric = tf.reduce_mean(hard_metrics)
     soft_metric = tf.reduce_mean(soft_metrics)
-    return soft_metric, hard_metric, true_labels, soft_voting_labels, hard_voting_labels
+    return soft_metric, hard_metric, true_labels, pred_labels, soft_voting_labels, hard_voting_labels
 
 
 def fit_model(hparams, model, exp_name, log_dir, save_model_dir, train_ds, val_ds, log_suffix=''):
@@ -201,14 +204,18 @@ def fit_model(hparams, model, exp_name, log_dir, save_model_dir, train_ds, val_d
     else:
         best_epoch = hparams['epochs']
 
+#     conf_mat = {}
     majority_eval_results = {}
     majority_conf_mat = {}
     for name, ds in sliced_ds.items():
-        soft_metric, hard_metric, true_labels, soft_voting_labels, hard_voting_labels = majority_voting(hparams, model, ds)
+        soft_metric, hard_metric, true_labels, pred_labels, soft_voting_labels, hard_voting_labels = majority_voting(hparams, model, ds)
+#         conf_mat[name] = tf.math.confusion_matrix(true_labels, pred_labels)
         majority_eval_results[name] = soft_metric, hard_metric
         soft_conf = tf.math.confusion_matrix(true_labels, soft_voting_labels)
         hard_conf = tf.math.confusion_matrix(true_labels, hard_voting_labels)
         majority_conf_mat[name] = soft_conf, hard_conf
+        with open(save_model_dir / (exp_name+log_suffix+'-'+name+'-output.pkl'), 'wb') as f:
+            pickle.dump((true_labels, pred_labels, soft_voting_labels, hard_voting_labels), f)
 
     return best_epoch, eval_results, conf_mat, majority_eval_results, majority_conf_mat
 
