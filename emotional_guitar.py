@@ -268,7 +268,7 @@ def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
         return ds.map(lambda filename, performer, emotion: tf_filepath(basedir, filename), num_parallel_calls)
 
     basedir = '/Users/johan/Datasets/Emotional guitar dataset'
-    class_names = ['aggressive', 'happy', 'relaxed', 'sad']
+    class_names = ['aggressive', 'relaxed', 'happy', 'sad']
     performers = ['LucTur', 'DavBen', 'OweWin', 'ValFui', 'AdoLaV', 'MatRig', 'TomCan', 'TizCam', 'SteRom', 'SimArm', 'SamLor', 'AleMar', 'MasChi', 'FilMel', 'GioAcq', 'TizBol', 'SalOli', 'FraSet', 'FedCer', 'CesSam', 'AntPao', 'DavRos', 'FraBen', 'GiaFer', 'GioDic', 'NicCon', 'AntDel', 'NicLat', 'LucFra', 'AngLoi', 'MarPia']
     csv_ds = tf.data.experimental.CsvDataset(os.path.join(basedir, 'emotional_guitar_dataset/annotations_emotional_guitar_dataset.csv'), [tf.string, tf.string, tf.string], header=True, select_cols=[1, 2, 4])
     paths = np.array([p.decode() for p in csv_ds.apply(lambda ds: ds_filepath(ds, basedir)).as_numpy_iterator()])

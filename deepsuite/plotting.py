@@ -1,6 +1,7 @@
 import io
 import itertools
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import tensorflow as tf
 
 
@@ -38,7 +39,9 @@ def plot_confusion_matrix(conf_mat, classes,
     plt.ioff()
     fig, ax = plt.subplots(figsize=(6, 6))
     im = ax.imshow(conf_mat, interpolation='nearest', cmap=cmap, vmin=0, vmax=vmax)
-    fig.colorbar(im, format='%.1f' if normalize else '%d')
+    cax = make_axes_locatable(ax).append_axes("right", size="5%", pad=0.1)
+    fig.colorbar(im, cax=cax, format='%d')
+
     tick_marks = range(len(classes))
     ax.set_xticks(tick_marks)
     ax.set_xticklabels(classes, rotation=45, fontsize=10)
@@ -46,7 +49,7 @@ def plot_confusion_matrix(conf_mat, classes,
     ax.set_yticklabels(classes, fontsize=10)
 
     thresh = tf.cast(tf.reduce_max(conf_mat) / 2, conf_mat.dtype)
-    fmt = '.1f' if normalize else 'd'
+    fmt = '.2f' if normalize else 'd'
     for i, j in itertools.product(range(conf_mat.shape[0]), range(conf_mat.shape[1])):
         ax.text(j, i, format(conf_mat[i, j], fmt)+('%' if normalize else ''), size=11,
                  horizontalalignment="center",
