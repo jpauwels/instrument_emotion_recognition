@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+from essentia.streaming import VectorInput, FrameCutter, TensorflowInputMusiCNN
+import essentia
+essentia.log.infoActive = False
 from deepsuite.ds_functions import slice_steps_to_ds
 from deepsuite.tf_functions import tf_datatype_wrapper
 from deepsuite.plotting import plot_confusion_matrix, mpl_fig_to_tf_image
@@ -61,40 +64,51 @@ def get_features(hparams, paths, labels, train_indices, val_indices):
         val_ds = tfds.load('guitar_emotion_recognition', split='validation', shuffle_files=False, with_info=False, as_supervised=True)
 
     elif hparams['feature_type'] == 'essentia':
-         
-        from essentia.streaming import MonoLoader, FrameCutter, TensorflowInputMusiCNN
-        import essentia
-        essentia.log.infoActive = False
+        from essentia.standard import MonoLoader
 
-        def melspectrogram_essentia(path, samplerate, frame_size, step_size):
-            loader = MonoLoader(filename=path, sampleRate=float(samplerate))
-            fc = FrameCutter(frameSize=int(frame_size), hopSize=int(step_size), startFromZero=True, validFrameThresholdRatio=1)
-            extractor = TensorflowInputMusiCNN()
-            pool = essentia.Pool()
+        def ds_audioloader_essentia(ds, samplerate, num_parallel_calls=tf.data.experimental.AUTOTUNE):
+            def audioloader_essentia(path, samplerate):
+                return MonoLoader(filename=path, sampleRate=float(samplerate))()
 
-            loader.audio >> fc.signal
-            fc.frame >> extractor.frame
-            extractor.bands >> (pool, "melbands")
+            def tf_audioloader_essentia(path, samplerate):
+                audio, = tf.py_function(tf_datatype_wrapper(audioloader_essentia), [path, samplerate], [tf.float32])
+                audio.set_shape((None))
+                return audio
 
-            essentia.run(loader)
-            return pool['melbands']
+            return ds.map(lambda path: tf_audioloader_essentia(path, samplerate), num_parallel_calls)
 
-        def ds_melspectrogram_essentia(ds, samplerate, frame_size, step_size, num_parallel_calls=tf.data.experimental.AUTOTUNE):
-            def tf_melspectrogram_essentia(path, samplerate, frame_size, step_size):
-                melbands, = tf.py_function(tf_datatype_wrapper(melspectrogram_essentia), [path, samplerate, frame_size, step_size], [tf.float32])
-                melbands.set_shape((None, hparams['mel_bands']))
-                return melbands
-            return ds.map(lambda path: tf_melspectrogram_essentia(path, samplerate, frame_size, step_size), num_parallel_calls)
-
-        train_features_ds = tf.data.Dataset.from_tensor_slices(paths[train_indices]).apply(lambda ds: ds_melspectrogram_essentia(ds, hparams['samplerate'], hparams['frame_size'], hparams['step_size']))
-        val_features_ds = tf.data.Dataset.from_tensor_slices(paths[val_indices]).apply(lambda ds: ds_melspectrogram_essentia(ds, hparams['samplerate'], hparams['frame_size'], hparams['step_size']))
+        train_features_ds = tf.data.Dataset.from_tensor_slices(paths[train_indices]).apply(lambda ds: ds_audioloader_essentia(ds, hparams['samplerate']))
+        val_features_ds = tf.data.Dataset.from_tensor_slices(paths[val_indices]).apply(lambda ds: ds_audioloader_essentia(ds, hparams['samplerate']))
         train_labels_ds = tf.data.Dataset.from_tensor_slices(labels[train_indices])
         val_labels_ds = tf.data.Dataset.from_tensor_slices(labels[val_indices])
         train_ds = tf.data.Dataset.zip((train_features_ds, train_labels_ds))
         val_ds = tf.data.Dataset.zip((val_features_ds, val_labels_ds))
+        
+        def ds_melspectrogram_essentia(ds, frame_size, step_size, num_parallel_calls=tf.data.experimental.AUTOTUNE):
+            def melspectrogram_essentia(audio, frame_size, step_size):
+                audio_input = VectorInput(audio)
+                fc = FrameCutter(frameSize=int(frame_size), hopSize=int(step_size), startFromZero=True, validFrameThresholdRatio=1)
+                extractor = TensorflowInputMusiCNN()
+                pool = essentia.Pool()
+
+                audio_input.data >> fc.signal
+                fc.frame >> extractor.frame
+                extractor.bands >> (pool, "melbands")
+
+                essentia.run(audio_input)
+                return pool['melbands']
+
+            def tf_melspectrogram_essentia(audio, frame_size, step_size):
+                melbands, = tf.py_function(tf_datatype_wrapper(melspectrogram_essentia), [audio, frame_size, step_size], [tf.float32])
+                melbands.set_shape((None, hparams['mel_bands']))
+                return melbands
+            return ds.map(lambda audio, label: (tf_melspectrogram_essentia(audio, frame_size, step_size), label), num_parallel_calls)
+
+        train_ds = train_ds.apply(lambda ds: ds_melspectrogram_essentia(ds, hparams['frame_size'], hparams['step_size']))
+        val_ds = val_ds.apply(lambda ds: ds_melspectrogram_essentia(ds, hparams['frame_size'], hparams['step_size']))
     else:
         raise ValueError('Unknown feature type "{}"'.format(hparams['feature_type']))
-        
+
     return train_ds, val_ds
 
 
