@@ -1,3 +1,6 @@
 [submodule "keras_audio_models"]
 	path = keras_audio_models
 	url = git@github.com:jpauwels/keras_audio_models.git
+[submodule "instrument_emotion_datasets"]
+	path = instrument_emotion_datasets
+	url = git@github.com:jpauwels/instrument_emotion_datasets.git

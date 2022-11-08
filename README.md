@@ -1,1 +1,1 @@
-# guitar_emotion_recognition
+# instrument_emotion_recognition

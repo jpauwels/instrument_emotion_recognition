@@ -8,27 +8,30 @@ from deepsuite.plotting import plot_confusion_matrix, mpl_fig_to_tf_image
 from deepsuite.keras_functions import get_pred_labels
 import tensorflow as tf
 import tensorflow_datasets as tfds
-import guitar_emotion_recognition
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.resolve()))
+from instrument_emotion_datasets import acoustic_guitar_emotion_recognition, electric_guitar_emotion_recognition, piano_emotion_recognition
 from tensorboard.plugins.hparams import api as hp
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, LearningRateScheduler, TensorBoard
-from sklearn.model_selection import GroupShuffleSplit, GroupKFold
 import numpy as np
 from datetime import datetime
 import glob
 import os
 from collections import Counter
 import tempfile
-import csv
 
 
 # Hyperparameter domains
 hparam_domains = {}
+hparam_domains['instrument'] = hp.HParam('instrument', hp.Discrete(['acoustic_guitar', 'electric_guitar', 'piano']))
+
 hparam_domains['mel_bands'] = hp.HParam('mel_bands', hp.Discrete([96]))
 hparam_domains['num_frames'] = hp.HParam('num_frames', hp.Discrete([187]))
 hparam_domains['samplerate'] = hp.HParam('samplerate', hp.Discrete([16000]))
 hparam_domains['frame_size'] = hp.HParam('frame_size', hp.Discrete([512]))
 hparam_domains['step_size'] = hp.HParam('step_size', hp.Discrete([256]))
-hparam_domains['feature_type'] = hp.HParam('feature_type', hp.Discrete(['essentia', 'tfds']))
+hparam_domains['feature_pipeline'] = hp.HParam('feature_pipeline', hp.Discrete(['essentia', 'tfds']))
 
 hparam_domains['batch_size'] = hp.HParam('batch_size', hp.Discrete([32, 64, 128, 256, 512]))
 hparam_domains['classifier_activation'] = hp.HParam('classifier_activation', hp.Discrete(['linear', 'relu']))
@@ -58,35 +61,15 @@ def write_hparam_domains(log_dir):
         hp.hparams_config(hparams=list(hparam_domains.values()), metrics=hparam_metrics)
 
 
-def get_features(hparams, paths, labels, train_indices, val_indices):
-    if hparams['feature_type'] == 'tfds':
-        train_ds = tfds.load('guitar_emotion_recognition', split='train', shuffle_files=True, with_info=False, as_supervised=True)
-        val_ds = tfds.load('guitar_emotion_recognition', split='validation', shuffle_files=False, with_info=False, as_supervised=True)
+def get_features(hparams, train_splits, val_split=None):
+    train_ds = tfds.load(f'{hparams["instrument"]}_emotion_recognition', split='+'.join([f'fold{i}' for i in train_splits]), shuffle_files=True, with_info=False, as_supervised=True)
+    if val_split is not None:
+        val_ds = tfds.load(f'{hparams["instrument"]}_emotion_recognition', split=f'fold{val_split}', shuffle_files=False, with_info=False, as_supervised=True)
 
-    elif hparams['feature_type'] == 'essentia':
-        from essentia.standard import MonoLoader
-
-        def ds_audioloader_essentia(ds, samplerate, num_parallel_calls=tf.data.experimental.AUTOTUNE):
-            def audioloader_essentia(path, samplerate):
-                return MonoLoader(filename=path, sampleRate=float(samplerate))()
-
-            def tf_audioloader_essentia(path, samplerate):
-                audio, = tf.py_function(tf_datatype_wrapper(audioloader_essentia), [path, samplerate], [tf.float32])
-                audio.set_shape((None))
-                return audio
-
-            return ds.map(lambda path: tf_audioloader_essentia(path, samplerate), num_parallel_calls)
-
-        train_features_ds = tf.data.Dataset.from_tensor_slices(paths[train_indices]).apply(lambda ds: ds_audioloader_essentia(ds, hparams['samplerate']))
-        val_features_ds = tf.data.Dataset.from_tensor_slices(paths[val_indices]).apply(lambda ds: ds_audioloader_essentia(ds, hparams['samplerate']))
-        train_labels_ds = tf.data.Dataset.from_tensor_slices(labels[train_indices])
-        val_labels_ds = tf.data.Dataset.from_tensor_slices(labels[val_indices])
-        train_ds = tf.data.Dataset.zip((train_features_ds, train_labels_ds))
-        val_ds = tf.data.Dataset.zip((val_features_ds, val_labels_ds))
-        
+    if hparams['feature_pipeline'] == 'essentia':
         def ds_melspectrogram_essentia(ds, frame_size, step_size, num_parallel_calls=tf.data.experimental.AUTOTUNE):
             def melspectrogram_essentia(audio, frame_size, step_size):
-                audio_input = VectorInput(audio)
+                audio_input = VectorInput(audio[:, 0])
                 fc = FrameCutter(frameSize=int(frame_size), hopSize=int(step_size), startFromZero=True, validFrameThresholdRatio=1)
                 extractor = TensorflowInputMusiCNN()
                 pool = essentia.Pool()
@@ -102,15 +85,19 @@ def get_features(hparams, paths, labels, train_indices, val_indices):
                 melbands, = tf.py_function(tf_datatype_wrapper(melspectrogram_essentia), [audio, frame_size, step_size], [tf.float32])
                 melbands.set_shape((None, hparams['mel_bands']))
                 return melbands
-            return ds.map(lambda audio, label: (tf_melspectrogram_essentia(audio, frame_size, step_size), label), num_parallel_calls)
+            return ds.map(lambda audio, label: (tf_melspectrogram_essentia(audio, frame_size, step_size), tf.cast(label, tf.int32)), num_parallel_calls)
 
         train_ds = train_ds.apply(lambda ds: ds_melspectrogram_essentia(ds, hparams['frame_size'], hparams['step_size']))
-        val_ds = val_ds.apply(lambda ds: ds_melspectrogram_essentia(ds, hparams['frame_size'], hparams['step_size']))
+        if val_split is not None:
+            val_ds = val_ds.apply(lambda ds: ds_melspectrogram_essentia(ds, hparams['frame_size'], hparams['step_size']))
     else:
-        raise ValueError('Unknown feature type "{}"'.format(hparams['feature_type']))
+        raise ValueError('Unknown feature type "{}"'.format(hparams['feature_pipeline']))
 
-    return train_ds, val_ds
-
+    if val_split is not None:
+        return train_ds, val_ds
+    else:
+        return train_ds, None
+    
 
 def get_model(hparams, num_classes):
     from keras_audio_models.models import build_musicnn_classifier
@@ -238,10 +225,10 @@ def write_log(log_dir, hparams, exp_name, class_names, metrics_names, best_epoch
                 try:
                     tf.summary.scalar(f'{split_name}.{metric_name}', value[0], step=0)
                     tf.summary.scalar(f'{split_name}.{metric_name}_std', value[1], step=0)
-                    print('The final model has achieved a {} of {:.3f} +/- {:.3f}'.format(metric_name, *value))
+                    print('The final model has achieved a {} {} of {:.3f} +/- {:.3f}'.format(split_name, metric_name, *value))
                 except TypeError:
                     tf.summary.scalar(f'{split_name}.{metric_name}', value, step=0)
-                    print('The final model has achieved a {} of {:.3f} at epoch {}'.format(metric_name, value, best_epoch+1))
+                    print('The final model has achieved a {} {} of {:.3f} at epoch {}'.format(split_name, metric_name, value, best_epoch+1))
 
         for split_name, conf in conf_mat.items():
             tf.summary.image(f'{split_name.title()} Confusion', mpl_fig_to_tf_image(plot_confusion_matrix(conf, class_names, normalize=True, title='')), step=best_epoch)
@@ -278,33 +265,22 @@ def write_log(log_dir, hparams, exp_name, class_names, metrics_names, best_epoch
 def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
     tf.random.set_seed(hparams['tf_seed'])
 
-    basedir = os.path.join(os.getenv('TFDS_DATA_DIR', os.path.expanduser('~/tensorflow_datasets')), 'downloads/extracted/ZIP.acoustic_guitar_emotion_dataset-v0.4.0.zip')
-    class_names = ['aggressive', 'relaxed', 'happy', 'sad']
-    performers = ['LucTur', 'DavBen', 'OweWin', 'ValFui', 'AdoLaV', 'MatRig', 'TomCan', 'TizCam', 'SteRom', 'SimArm', 'SamLor', 'AleMar', 'MasChi', 'FilMel', 'GioAcq', 'TizBol', 'SalOli', 'FraSet', 'FedCer', 'CesSam', 'AntPao', 'DavRos', 'FraBen', 'GiaFer', 'GioDic', 'NicCon', 'AntDel', 'NicLat', 'LucFra', 'AngLoi', 'MarPia']
-    with open(os.path.join(basedir, 'emotional_guitar_dataset/annotations_emotional_guitar_dataset.csv')) as f:
-        rows = [row for row in csv.DictReader(f)]
-    paths = np.array([os.path.join(basedir, 'emotional_guitar_dataset', row['file_name']) for row in rows])
-    labels = np.array([class_names.index(row['emotion']) for row in rows], dtype=np.int32)
-    groups = np.array([performers.index(row['composer_pseudonym']) for row in rows], dtype=np.int32)
+    ds_info = tfds.builder(f'{hparams["instrument"]}_emotion_recognition').info
+    class_names = ds_info.features['emotion'].names
+    num_folds = len(ds_info.splits)
 
     exp_name = os.path.join(exp_base_name, datetime.now().strftime("%y%m%d-%H%M%S"))
     log_dir = os.path.join(log_base_dir, exp_name)
 
-    if hparams['validation_split']:
-        train_indices, val_indices = next(GroupShuffleSplit(n_splits=1, test_size=hparams['validation_split'], random_state=hparams['split_seed']).split(paths, labels, groups))
-        train_ds, val_ds = get_features(hparams, paths, labels, train_indices, val_indices)
-        model = get_model(hparams, len(class_names))
-        model_output = fit_model(model, exp_name, log_dir, save_model_dir, train_ds, val_ds)
-        write_log(log_dir, hparams, exp_name, class_names, model.metrics_names, *model_output)
-
-    elif hparams['num_folds']:
+    if hparams['num_folds'] == num_folds:
         fold_outputs = []
-        fold_splitter = GroupKFold(n_splits=hparams['num_folds'])
         if not hparams['finetuning']:
             init_model = get_model(hparams, len(class_names))
-        for train_indices, val_indices in fold_splitter.split(paths, labels, groups):
-            train_ds, val_ds = get_features(hparams, paths, labels, train_indices, val_indices)
-            fold_suffix = f'/fold{len(fold_outputs)+1}'
+        for fold_idx in range(1, num_folds+1):
+            print(f'\nFold {fold_idx}')
+            train_splits = [t for t in range(1, num_folds+1) if t != fold_idx]
+            train_ds, val_ds = get_features(hparams, train_splits, fold_idx)
+            fold_suffix = f'/fold{fold_idx}'
             if hparams['finetuning']:
                 fold_model = get_model({**hparams, 'weights': hparams['weights']+fold_suffix}, len(class_names))
             else:
@@ -319,6 +295,12 @@ def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
                                                       np.std(np.stack([f[split] for f in fold_majority_eval_results]), axis=0))) for split in fold_majority_eval_results[0].keys()}
         sum_majority_conf_mat = {split: [v for v in tf.reduce_sum([f[split] for f in fold_majority_conf_mat], axis=0)] for split in fold_majority_conf_mat[0].keys()}
         write_log(log_dir, hparams, exp_name, class_names, fold_model.metrics_names, None, mean_eval_results, sum_conf_mat, mean_majority_eval_results, sum_majority_conf_mat)
+    else:
+        train_ds, val_ds = get_features(hparams, range(num_folds))
+        model = get_model(hparams, len(class_names))
+        model_output = fit_model(model, exp_name, log_dir, save_model_dir, train_ds, val_ds)
+        write_log(log_dir, hparams, exp_name, class_names, model.metrics_names, *model_output)
+
 
 
 
@@ -328,7 +310,7 @@ if __name__ == '__main__':
     import itertools
     from distutils.util import strtobool
     
-    log_base_dir = os.path.expanduser('~/private/tensorboard')
+    log_base_dir = './tensorboard'
     exp_base_name = os.path.splitext(os.path.basename(__file__))[0]
 
     def list_saved_models(save_model_dir, exp_base_name):
@@ -352,15 +334,16 @@ if __name__ == '__main__':
             super(ResetAppendAction, self).__call__(parser, namespace, values, option_string)
 
     parser = argparse.ArgumentParser(description='''
-    Run emotional guitar classification experiment.''',
+    Run instrument emotion recognition experiment.''',
     allow_abbrev=False)
     features_config = parser.add_argument_group('Feature options')
+    features_config.add_argument('-i', '--instrument', default=['acoustic_guitar'], action=ResetAppendAction, type=str, choices=hparam_domains['instrument'].domain.values)
     features_config.add_argument('-m', '--mel-bands', default=[96], action=ResetAppendAction, type=int)
     features_config.add_argument('-n', '--num-frames', default=[187], action=ResetAppendAction, type=int)
     features_config.add_argument('-r', '--samplerate', default=[16000], action=ResetAppendAction, type=int)
     features_config.add_argument('-f', '--frame-size', default=[512], action=ResetAppendAction, type=int)
     features_config.add_argument('-s', '--step-size', default=[256], action=ResetAppendAction, type=int)
-    features_config.add_argument('-t', '--feature-type', default=['essentia'], action=ResetAppendAction, type=str, choices=hparam_domains['feature_type'].domain.values)
+    features_config.add_argument('-t', '--feature-pipeline', default=['essentia'], action=ResetAppendAction, type=str, choices=hparam_domains['feature_pipeline'].domain.values)
 
     model_config = parser.add_argument_group('Model options')
     model_config.add_argument('-c', '--classifier-activation', default=['relu'], action=ResetAppendAction, type=str, choices=hparam_domains['classifier_activation'].domain.values)
@@ -368,12 +351,10 @@ if __name__ == '__main__':
     model_config.add_argument('-w', '--weights', default=['MTT_musicnn'], action=ResetAppendAction, type=str, choices=hparam_domains['weights'].domain.values)
 
     train_config = parser.add_argument_group('Training options')
-    train_config.add_argument('--validation-split', default=[0], action=ResetAppendAction, type=float)
-    train_config.add_argument('--num-folds', default=[0], action=ResetAppendAction, type=int)
-    train_config.add_argument('--split-seed', default=[0], action=ResetAppendAction, type=int)
+    train_config.add_argument('--num-folds', default=[5], action=ResetAppendAction, type=int)
     train_config.add_argument('--tf-seed', default=[0], action=ResetAppendAction, type=int)
     train_config.add_argument('-o', '--optimizer', default=['Adam'], action=ResetAppendAction, type=str, choices=hparam_domains['optimizer'].domain.values)
-    train_config.add_argument('-l', '--learning-rate', default=[0.001], action=ResetAppendAction, type=float)
+    train_config.add_argument('-l', '--learning-rate', default=[0.0001], action=ResetAppendAction, type=float)
     train_config.add_argument('-b', '--batch-size', default=[256], action=ResetAppendAction, type=int)
     train_config.add_argument('-e', '--epochs', default=[100], action=ResetAppendAction, type=int)
     train_config.add_argument('--early-stopping-patience', default=[30], action=ResetAppendAction, type=int)
