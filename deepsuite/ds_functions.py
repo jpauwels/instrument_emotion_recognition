@@ -8,15 +8,15 @@ def ds_fix_length(ds, length, position='start', pad_mode='constant', pad_value='
 
 
 def ds_spectrogram(ds, fft_size, window_size, step_size, num_parallel_calls=tf.data.experimental.AUTOTUNE):
-    return ds.map(lambda samples: tfio.experimental.audio.spectrogram(tf.squeeze(samples), fft_size, window_size, step_size, name='spectrogram'), num_parallel_calls)
+    return ds.map(lambda samples: tfio.audio.spectrogram(tf.squeeze(samples), fft_size, window_size, step_size, name='spectrogram'), num_parallel_calls)
 
 
 def ds_melscale(ds, samplerate, mel_bands, fmin, fmax, num_parallel_calls=tf.data.experimental.AUTOTUNE):
-    return ds.map(lambda magnitudes: tfio.experimental.audio.melscale(magnitudes, samplerate, mel_bands, fmin, fmax, name='melscale'), num_parallel_calls)
+    return ds.map(lambda magnitudes: tfio.audio.melscale(magnitudes, samplerate, mel_bands, fmin, fmax, name='melscale'), num_parallel_calls)
 
 
 def ds_dbscale(ds, db_range=120, num_parallel_calls=tf.data.experimental.AUTOTUNE):
-    return ds.map(lambda values: tfio.experimental.audio.dbscale(values, db_range, name='dbscale'), num_parallel_calls)
+    return ds.map(lambda values: tfio.audio.dbscale(values, db_range, name='dbscale'), num_parallel_calls)
 
 
 def ds_expand_channel(ds, num_parallel_calls=tf.data.experimental.AUTOTUNE):
