@@ -44,7 +44,7 @@ def plot_confusion_matrix(conf_mat, classes,
 
     tick_marks = range(len(classes))
     ax.set_xticks(tick_marks)
-    ax.set_xticklabels(classes, rotation=45, fontsize=10)
+    ax.set_xticklabels(classes, fontsize=10)
     ax.set_yticks(tick_marks)
     ax.set_yticklabels(classes, fontsize=10)
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-from deepsuite.ds_functions import *
-from deepsuite.tf_functions import *
+from deepsuite.ds_functions import ds_value_encoder, slice_steps_to_ds
+from deepsuite.tf_functions import tf_datatype_wrapper
 from deepsuite.plotting import plot_confusion_matrix, mpl_fig_to_tf_image
 from deepsuite.keras_functions import get_pred_labels
 import tensorflow as tf
@@ -13,7 +13,6 @@ import numpy as np
 from datetime import datetime
 import glob
 import os
-from distutils.util import strtobool
 from collections import Counter
 import tempfile
 
@@ -269,7 +268,7 @@ def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
 
     tf.random.set_seed(hparams['tf_seed'])
 
-    basedir = '/Users/johan/Datasets/Emotional guitar dataset'
+    basedir = os.path.join(os.getenv('TFDS_DATA_DIR', os.path.expanduser('~/tensorflow_datasets')), 'downloads/extracted/ZIP.acoustic_guitar_emotion_dataset-v0.4.0.zip')
     class_names = ['aggressive', 'relaxed', 'happy', 'sad']
     performers = ['LucTur', 'DavBen', 'OweWin', 'ValFui', 'AdoLaV', 'MatRig', 'TomCan', 'TizCam', 'SteRom', 'SimArm', 'SamLor', 'AleMar', 'MasChi', 'FilMel', 'GioAcq', 'TizBol', 'SalOli', 'FraSet', 'FedCer', 'CesSam', 'AntPao', 'DavRos', 'FraBen', 'GiaFer', 'GioDic', 'NicCon', 'AntDel', 'NicLat', 'LucFra', 'AngLoi', 'MarPia']
     csv_ds = tf.data.experimental.CsvDataset(os.path.join(basedir, 'emotional_guitar_dataset/annotations_emotional_guitar_dataset.csv'), [tf.string, tf.string, tf.string], header=True, select_cols=[1, 2, 4])
@@ -316,6 +315,7 @@ if __name__ == '__main__':
     
     import argparse
     import itertools
+    from distutils.util import strtobool
     
     log_base_dir = os.path.expanduser('~/private/tensorboard')
     exp_base_name = os.path.splitext(os.path.basename(__file__))[0]
