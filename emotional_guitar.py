@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from deepsuite.ds_functions import ds_value_encoder, slice_steps_to_ds
+from deepsuite.ds_functions import slice_steps_to_ds
 from deepsuite.tf_functions import tf_datatype_wrapper
 from deepsuite.plotting import plot_confusion_matrix, mpl_fig_to_tf_image
 from deepsuite.keras_functions import get_pred_labels
@@ -15,6 +15,7 @@ import glob
 import os
 from collections import Counter
 import tempfile
+import csv
 
 
 # Hyperparameter domains
@@ -261,20 +262,16 @@ def write_log(log_dir, hparams, exp_name, class_names, metrics_names, best_epoch
 
 
 def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
-    def ds_filepath(ds, basedir, num_parallel_calls=tf.data.experimental.AUTOTUNE):
-        def tf_filepath(basedir, filename):
-            return tf.strings.join([basedir, '/emotional_guitar_dataset/', filename])
-        return ds.map(lambda filename, performer, emotion: tf_filepath(basedir, filename), num_parallel_calls)
-
     tf.random.set_seed(hparams['tf_seed'])
 
     basedir = os.path.join(os.getenv('TFDS_DATA_DIR', os.path.expanduser('~/tensorflow_datasets')), 'downloads/extracted/ZIP.acoustic_guitar_emotion_dataset-v0.4.0.zip')
     class_names = ['aggressive', 'relaxed', 'happy', 'sad']
     performers = ['LucTur', 'DavBen', 'OweWin', 'ValFui', 'AdoLaV', 'MatRig', 'TomCan', 'TizCam', 'SteRom', 'SimArm', 'SamLor', 'AleMar', 'MasChi', 'FilMel', 'GioAcq', 'TizBol', 'SalOli', 'FraSet', 'FedCer', 'CesSam', 'AntPao', 'DavRos', 'FraBen', 'GiaFer', 'GioDic', 'NicCon', 'AntDel', 'NicLat', 'LucFra', 'AngLoi', 'MarPia']
-    csv_ds = tf.data.experimental.CsvDataset(os.path.join(basedir, 'emotional_guitar_dataset/annotations_emotional_guitar_dataset.csv'), [tf.string, tf.string, tf.string], header=True, select_cols=[1, 2, 4])
-    paths = np.array([p.decode() for p in csv_ds.apply(lambda ds: ds_filepath(ds, basedir)).as_numpy_iterator()])
-    labels = np.array(list(csv_ds.map(lambda filename, performer, emotion: emotion).apply(lambda ds: ds_value_encoder(ds, tf.constant(class_names))).as_numpy_iterator()))
-    groups = np.array(list(csv_ds.map(lambda filename, performer, emotion: performer).apply(lambda ds: ds_value_encoder(ds, tf.constant(performers))).as_numpy_iterator()))
+    with open(os.path.join(basedir, 'emotional_guitar_dataset/annotations_emotional_guitar_dataset.csv')) as f:
+        rows = [row for row in csv.DictReader(f)]
+    paths = np.array([os.path.join(basedir, 'emotional_guitar_dataset', row['file_name']) for row in rows])
+    labels = np.array([class_names.index(row['emotion']) for row in rows], dtype=np.int32)
+    groups = np.array([performers.index(row['composer_pseudonym']) for row in rows], dtype=np.int32)
 
     exp_name = os.path.join(exp_base_name, datetime.now().strftime("%y%m%d-%H%M%S"))
     log_dir = os.path.join(log_base_dir, exp_name)
