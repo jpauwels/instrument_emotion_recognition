@@ -45,13 +45,13 @@ def ds_melspectrogram_db(ds, src_samplerate, target_samplerate, fft_size, window
 #         .apply(lambda ds: ds_expand_channel(ds, num_parallel_calls))
 
 
-def slice_steps_to_ds(tensor, label, num_features, slice_length, start=-1):
-    slices, labels = tf.py_function(tf_step_slicer, [tensor, label, slice_length, start], [tf.float32, tf.int32])
-    slices.set_shape((None, slice_length, num_features))
-    labels.set_shape((None,))
-    slices_ds = tf.data.Dataset.from_tensor_slices(slices)
-    labels_ds = tf.data.Dataset.from_tensor_slices(labels)
-    return tf.data.Dataset.zip((slices_ds, labels_ds))
+def ds_step_slicer(ds, num_features, slice_length, start=tf.constant(-1), num_parallel_calls=tf.data.experimental.AUTOTUNE):
+    def slice_steps_to_ds(tensor, label, num_features, slice_length, start):
+        slices, labels = tf_step_slicer(tensor, label, num_features, slice_length, start)
+        slices_ds = tf.data.Dataset.from_tensor_slices(slices)
+        labels_ds = tf.data.Dataset.from_tensor_slices(labels)
+        return tf.data.Dataset.zip((slices_ds, labels_ds))
+    return ds.map(lambda tensor, label: slice_steps_to_ds(tensor, label, num_features, slice_length, start), num_parallel_calls=num_parallel_calls)
 
 
 def ds_value_encoder(ds, key_tensor, value_tensor=None, num_parallel_calls=tf.data.experimental.AUTOTUNE):
@@ -59,7 +59,7 @@ def ds_value_encoder(ds, key_tensor, value_tensor=None, num_parallel_calls=tf.da
     return ds.map(lambda label: encoder.lookup(label), num_parallel_calls)
 
 
-def ds_slice_dict(ds_dict, size, start=0):
+def ds_slice_dict(ds_dict, size, start=tf.constant(0)):
     return {k: v.skip(start).take(size) for k, v in ds_dict.items()}
 
 
@@ -69,7 +69,7 @@ def ds_supervised_pair(ds_dict, feature_key, label_key):
 
 def ds_size(ds):
     cardinality = ds.cardinality().numpy()
-    if cardinality in [tf.data.INFINITE_CARDINALITY, tf.data.UNKNOWN_CARDINALITY]:
+    if cardinality in (tf.data.INFINITE_CARDINALITY, tf.data.UNKNOWN_CARDINALITY):
         size = 0
         for _ in ds:
             size += 1

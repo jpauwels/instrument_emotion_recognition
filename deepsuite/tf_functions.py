@@ -1,18 +1,17 @@
 import tensorflow as tf
 
 
-def tf_convert_type(tf_type):
-    try:
-        np_type = tf_type.numpy()
-    except AttributeError:
-        return tf_type
-    try:
-        return np_type.decode()
-    except AttributeError:
-        return np_type
-
-
 def tf_datatype_wrapper(func):
+    def tf_convert_type(tf_type):
+        try:
+            np_type = tf_type.numpy()
+        except AttributeError:
+            return tf_type
+        try:
+            return np_type.decode()
+        except AttributeError:
+            return np_type
+
     def wrap_and_call(*args, **kwargs): 
         new_args = []
         for arg in args:
@@ -21,6 +20,7 @@ def tf_datatype_wrapper(func):
         for k, v in kwargs.items():
             new_kwargs[k] = tf_convert_type(v)
         return func(*new_args, **new_kwargs)
+
     return wrap_and_call
 
 
@@ -53,22 +53,32 @@ def tf_fix_length(tensor, length, position='start', pad_mode='constant', pad_val
     else:
         return tensor
 
+
 def tf_zscore(tensor, epsilon):
     eps = tf.constant(epsilon)
     return (tensor - tf.math.reduce_mean(tensor, keepdims=True)) / tf.math.maximum(tf.math.reduce_std(tensor, keepdims=True), eps)
 
-def tf_step_slicer(tensor, label, slice_length, start=-1):
-    num_steps, num_features = tensor.shape
-    num_slices = num_steps // slice_length
-    if start < 0:
-        used_steps = num_slices * slice_length
-        tensor = tf.image.random_crop(tensor, [used_steps, num_features])
-    elif start > 0:
-        tensor = tensor[start:, :]
-    tensor_expanded = tf.expand_dims(tf.expand_dims(tensor, axis=-1), axis=0)
-    flat_slices = tf.image.extract_patches(tensor_expanded, sizes=[1, slice_length, num_features, 1], strides=[1, slice_length, num_features, 1], rates=[1, 1, 1, 1], padding='VALID', name='time_slicer')
-    slices = tf.reshape(flat_slices, [num_slices, slice_length, num_features])
-    return slices, tf.repeat(label, num_slices)
+
+def tf_step_slicer(tensor, label, num_features, slice_length, start=tf.constant(-1)):
+    @tf_datatype_wrapper
+    def step_slicer(tensor, label, slice_length, start):
+        num_steps, num_features = tf.shape(tensor)
+        num_slices = num_steps // slice_length
+        if start < 0:
+            used_steps = num_slices * slice_length
+            tensor = tf.image.random_crop(tensor, [used_steps, num_features])
+        elif start > 0:
+            tensor = tensor[start:]
+        tensor_expanded = tf.expand_dims(tf.expand_dims(tensor, axis=-1), axis=0)
+        flat_slices = tf.image.extract_patches(tensor_expanded, sizes=[1, slice_length, num_features, 1], strides=[1, slice_length, num_features, 1], rates=[1, 1, 1, 1], padding='VALID', name='time_slicer')
+        slices = tf.reshape(flat_slices, [num_slices, slice_length, num_features])
+        return slices, tf.repeat(label, num_slices)
+
+    slices, labels = tf.py_function(step_slicer, [tensor, label, slice_length, start], [tf.float32, tf.int32])
+    slices.set_shape((None, slice_length, num_features))
+    labels.set_shape((None,))
+    return slices, labels
+
 
 def tf_value_encoder(key_tensor, value_tensor=None):
     if value_tensor is None:

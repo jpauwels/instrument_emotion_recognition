@@ -2,7 +2,7 @@
 from essentia.streaming import VectorInput, FrameCutter, TensorflowInputMusiCNN
 import essentia
 essentia.log.infoActive = False
-from deepsuite.ds_functions import slice_steps_to_ds
+from deepsuite.ds_functions import ds_step_slicer
 from deepsuite.tf_functions import tf_datatype_wrapper
 from deepsuite.plotting import plot_confusion_matrix, mpl_fig_to_tf_image
 from deepsuite.keras_functions import get_pred_labels
@@ -69,6 +69,7 @@ def get_features(hparams, train_splits, val_split=None):
 
     if hparams['feature_pipeline'] == 'essentia':
         def ds_melspectrogram_essentia(ds, frame_size, step_size, num_parallel_calls=tf.data.experimental.AUTOTUNE):
+            @tf_datatype_wrapper
             def melspectrogram_essentia(audio, frame_size, step_size):
                 audio_input = VectorInput(audio[:, 0])
                 fc = FrameCutter(frameSize=int(frame_size), hopSize=int(step_size), startFromZero=True, validFrameThresholdRatio=1)
@@ -83,9 +84,10 @@ def get_features(hparams, train_splits, val_split=None):
                 return pool['melbands']
 
             def tf_melspectrogram_essentia(audio, frame_size, step_size):
-                melbands, = tf.py_function(tf_datatype_wrapper(melspectrogram_essentia), [audio, frame_size, step_size], [tf.float32])
+                melbands, = tf.py_function(melspectrogram_essentia, [audio, frame_size, step_size], [tf.float32])
                 melbands.set_shape((None, hparams['mel_bands']))
                 return melbands
+
             return ds.map(lambda audio, label: (tf_melspectrogram_essentia(audio, frame_size, step_size), tf.cast(label, tf.int32)), num_parallel_calls)
 
         train_ds = train_ds.apply(lambda ds: ds_melspectrogram_essentia(ds, hparams['frame_size'], hparams['step_size'], tfdata_parallel))
@@ -143,10 +145,6 @@ def majority_voting(model, sliced_ds):
 
 
 def fit_model(model, exp_name, log_dir, save_model_dir, train_ds, val_ds, log_suffix=''):
-
-    def ds_step_slicer(ds, num_features, slice_length, start=-1, num_parallel_calls=tf.data.experimental.AUTOTUNE):
-        return ds.map(lambda tensor, label: slice_steps_to_ds(tensor, label, num_features, slice_length, start), num_parallel_calls=num_parallel_calls)
-
     sliced_ds = {'train': train_ds.cache(name='cache_presliced_train').apply(lambda ds: ds_step_slicer(ds, hparams['mel_bands'], hparams['num_frames'], -1, tfdata_parallel))}
 
     train_cardinality = sliced_ds['train'].flat_map(lambda x: x, name='flatten_cardinality').cardinality().numpy()
