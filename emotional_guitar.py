@@ -188,6 +188,11 @@ def fit_model(model, exp_name, log_dir, save_model_dir, train_ds, val_ds, log_su
     if save_model_dir:
         save_path = os.path.join(save_model_dir, exp_name+log_suffix+'.h5')
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        model.get_layer('frontend').trainable = True
+        model.get_layer('midend').trainable = True
+        model.get_layer('backend').bn_flat_pool.trainable = True
+        model.get_layer('backend').penultimate.trainable = True
+        model.get_layer('backend').bn_penultimate.trainable = True
         model.save(save_path, save_format='h5')
 
     eval_results = {'train': model.evaluate(train_pipe, verbose=0)}
