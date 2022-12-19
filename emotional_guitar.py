@@ -16,8 +16,6 @@ from tensorboard.plugins.hparams import api as hp
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, LearningRateScheduler, TensorBoard
 import numpy as np
 from datetime import datetime
-import glob
-import os
 from collections import Counter
 import tempfile
 
@@ -47,8 +45,8 @@ accurary_name = tf.keras.metrics.get(METRIC_ACCURACY).__name__.replace('_', ' ')
 
 
 def write_hparam_domains(log_dir):
-    for p in glob.glob(os.path.join(log_dir, '*.hparam_domains.v2')):
-        os.remove(p)
+    for f in Path(log_dir).glob('*.hparam_domains.v2'):
+        f.unlink(missing_ok=True)
     hparam_metrics = []
     for split_name, split_type in (('validation', hp.Metric.VALIDATION), ('train', hp.Metric.TRAINING)):
         hparam_metrics.append(hp.Metric(f'{split_name}.{METRIC_ACCURACY}', group='', display_name=f'{split_name.title()} {accurary_name.title()}', dataset_type=split_type))
@@ -58,7 +56,7 @@ def write_hparam_domains(log_dir):
         hparam_metrics.append(hp.Metric(f'{split_name}.hard_voting_{METRIC_ACCURACY}', group='', display_name=f'{split_name.title()} Hard Voting {accurary_name.title()}', dataset_type=split_type))
         hparam_metrics.append(hp.Metric(f'{split_name}.hard_voting_{METRIC_ACCURACY}_std', group='', display_name=f'{split_name.title()} Hard Voting {accurary_name.title()} StDev', dataset_type=split_type))
     hparam_metrics.append(hp.Metric('best_epoch', group='', display_name='Best Epoch', dataset_type=hp.Metric.VALIDATION))
-    with tf.summary.create_file_writer(log_dir, filename_suffix='.hparam_domains.v2').as_default():
+    with tf.summary.create_file_writer(str(log_dir), filename_suffix='.hparam_domains.v2').as_default():
         hp.hparams_config(hparams=list(hparam_domains.values()), metrics=hparam_metrics)
 
 
@@ -166,28 +164,28 @@ def fit_model(model, exp_name, log_dir, save_model_dir, train_ds, val_ds, log_su
     else:
         val_pipe = None
 
-    os.makedirs(os.path.dirname(log_dir), exist_ok=True)
+    log_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    tensorboard = TensorBoard(log_dir=log_dir+log_suffix, profile_batch=0)
+    tensorboard = TensorBoard(log_dir=str(log_dir)+log_suffix, profile_batch=0)
     # exp_decay = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=0.001, decay_steps=15, decay_rate=0.4, staircase=True)
     # pcwconst_decay = tf.keras.optimizers.schedules.PiecewiseConstantDecay([13, 28, 43, 58], [0.001, 0.0004, 0.00016, 6.4e-5, 4e-5])
     # lrate = LearningRateScheduler(pcwconst_decay, verbose=1)
     # from deepsuite.keras import ConfusionMatrixOnEpoch
     # confusion_matrix = ConfusionMatrixOnEpoch(log_dir, class_names, ['train', 'validation'])
     callbacks = [tensorboard]#[, confusion_matrix, lrate],
-    tmp_weights_path = os.path.join(tempfile.gettempdir(), exp_name+log_suffix+'.h5')
+    tmp_weights_path = Path(tempfile.gettempdir()) / (exp_name+log_suffix+'.h5')
     if val_ds is not None:
         earlystopper = EarlyStopping(monitor='val_'+METRIC_ACCURACY, patience=hparams['early_stopping_patience'], verbose=1, restore_best_weights=True)
         checkpointer = ModelCheckpoint(tmp_weights_path, monitor='val_'+METRIC_ACCURACY, verbose=1, save_best_only=True)
         callbacks += [earlystopper, checkpointer]
 
     fit_log = model.fit(train_pipe, validation_data=val_pipe, epochs=hparams['epochs'], verbose=2, callbacks=callbacks)
-    if os.path.exists(tmp_weights_path):
+    if tmp_weights_path.is_file():
         model.load_weights(tmp_weights_path) # when max epochs gets exceeded, early stopping callback doesn't load best model
-        os.remove(tmp_weights_path)
+        tmp_weights_path.unlink()
     if save_model_dir:
-        save_path = os.path.join(save_model_dir, exp_name+log_suffix+'.h5')
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        save_path = save_model_dir / (exp_name+log_suffix+'.h5')
+        save_path.parent.mkdir(parents=True, exist_ok=True)
         model.get_layer('frontend').trainable = True
         model.get_layer('midend').trainable = True
         model.get_layer('backend').bn_flat_pool.trainable = True
@@ -217,7 +215,7 @@ def fit_model(model, exp_name, log_dir, save_model_dir, train_ds, val_ds, log_su
 
 
 def write_log(log_dir, hparams, exp_name, class_names, metrics_names, best_epoch, eval_results, conf_mat, majority_eval_results, majority_conf_mat, eval_stdev=None, majority_stdev=None):
-    with tf.summary.create_file_writer(log_dir, filename_suffix='.final.v2').as_default():
+    with tf.summary.create_file_writer(str(log_dir), filename_suffix='.final.v2').as_default():
         hp.hparams(hparams, trial_id=exp_name)
         if best_epoch is not None:
             tf.summary.scalar('best_epoch', best_epoch, step=0)
@@ -273,8 +271,8 @@ def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
     class_names = ds_info.features['emotion'].names
     num_folds = len(ds_info.splits)
 
-    exp_name = os.path.join(exp_base_name, datetime.now().strftime("%y%m%d-%H%M%S"))
-    log_dir = os.path.join(log_base_dir, exp_name)
+    exp_name = str(Path(exp_base_name) / datetime.now().strftime("%y%m%d-%H%M%S"))
+    log_dir = log_base_dir / exp_name
 
     if hparams['num_folds'] == num_folds:
         fold_outputs = []
@@ -314,17 +312,17 @@ if __name__ == '__main__':
     import itertools
     from distutils.util import strtobool
     
-    log_base_dir = './tensorboard'
-    exp_base_name = os.path.splitext(os.path.basename(__file__))[0]
+    log_base_dir = Path('./tensorboard')
+    exp_base_name = Path(__file__).stem
 
     def list_saved_models(save_model_dir, exp_base_name):
-        d = os.path.join(save_model_dir, exp_base_name)
+        d = save_model_dir / exp_base_name
         try:
-            return [os.path.join('..', d, x) for x in os.listdir(d) if os.path.isdir(os.path.join(d, x)) or os.path.splitext(x)[1] == '.h5']
+            return [str('..' / x) for x in d.iterdir() if x.is_dir() or x.suffix == '.h5']
         except FileNotFoundError:
             return []
 
-    hparam_domains['weights'] = hp.HParam('weights', hp.Discrete(hparam_domains['weights'].domain.values + list_saved_models('saved-models', exp_base_name)))
+    hparam_domains['weights'] = hp.HParam('weights', hp.Discrete(hparam_domains['weights'].domain.values + list_saved_models(Path('saved-models'), exp_base_name)))
 
     class ResetAppendAction(argparse._AppendAction):
         def __init__(self, option_strings, dest, **kwargs):
@@ -366,8 +364,8 @@ if __name__ == '__main__':
     train_config.add_argument('--finetuning', default=[False], action=ResetAppendAction, type=lambda x: bool(strtobool(x)))
 
     args = vars(parser.parse_args())
-    save_model_dir = args.pop('save_model_dir')
-    write_hparam_domains(os.path.join(log_base_dir, exp_base_name))
+    save_model_dir = Path(args.pop('save_model_dir'))
+    write_hparam_domains(log_base_dir / exp_base_name)
 
     for param_combo in itertools.product(*args.values()):
         hparams = dict(zip(args.keys(), param_combo))
