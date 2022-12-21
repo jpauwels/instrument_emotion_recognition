@@ -226,10 +226,10 @@ def write_log(log_dir, hparams, exp_name, class_names, metrics_names, best_epoch
                 try:
                     tf.summary.scalar(f'{split_name}.{metric_name}', value[0], step=0)
                     tf.summary.scalar(f'{split_name}.{metric_name}_std', value[1], step=0)
-                    print('The final model has achieved a {} {} of {:.3f} +/- {:.3f}'.format(split_name, metric_name, *value))
+                    print(f'The final model has achieved a {split_name} {metric_name} of {value[0]:.3f} +/- {value[1]:.3f}')
                 except TypeError:
                     tf.summary.scalar(f'{split_name}.{metric_name}', value, step=0)
-                    print('The final model has achieved a {} {} of {:.3f} at epoch {}'.format(split_name, metric_name, value, best_epoch+1))
+                    print(f'The final model has achieved a {split_name} {metric_name} of {value:.3f} at epoch {best_epoch+1}')
 
         for split_name, conf in conf_mat.items():
             tf.summary.image(f'{split_name.title()} Confusion', mpl_fig_to_tf_image(plot_confusion_matrix(conf, class_names, normalize=True, title='')), step=best_epoch)
@@ -240,11 +240,11 @@ def write_log(log_dir, hparams, exp_name, class_names, metrics_names, best_epoch
                 tf.summary.scalar(f'{split_name}.soft_voting_{METRIC_ACCURACY}_std', soft_metric[1], step=0)
                 tf.summary.scalar(f'{split_name}.hard_voting_{METRIC_ACCURACY}', hard_metric[0], step=0)
                 tf.summary.scalar(f'{split_name}.hard_voting_{METRIC_ACCURACY}_std', hard_metric[1], step=0)
-                print(f'The final model has achieved a {split_name} soft voting {accurary_name} of {soft_metric[0]:.3f} +/- {soft_metric[1]:.3f} and a {split_name} hard voting {accurary_name} of {hard_metric[0]:.3f} +/- {hard_metric[1]:.3f}')
+                print(f'The final model has achieved a {split_name} soft voting {accurary_name} of {100*soft_metric[0]:.3f}% +/- {100*soft_metric[1]:.3f}% and a {split_name} hard voting {accurary_name} of {100*hard_metric[0]:.3f}% +/- {100*hard_metric[1]:.3f}%')
             except IndexError:
                 tf.summary.scalar(f'{split_name}.soft_voting_{METRIC_ACCURACY}', soft_metric, step=0)
                 tf.summary.scalar(f'{split_name}.hard_voting_{METRIC_ACCURACY}', hard_metric, step=0)
-                print(f'The final model has achieved a {split_name} soft voting {accurary_name} of {soft_metric:.3f} and a {split_name} hard voting {accurary_name} of {hard_metric:.3f} at epoch {best_epoch+1}')
+                print(f'The final model has achieved a {split_name} soft voting {accurary_name} of {100*soft_metric:.3f}% and a {split_name} hard voting {accurary_name} of {100*hard_metric:.3f}% at epoch {best_epoch+1}')
         
         for split_name, (soft_conf, hard_conf) in majority_conf_mat.items():
             tf.summary.image(f'{split_name.title()} Soft Voting Confusion', mpl_fig_to_tf_image(plot_confusion_matrix(soft_conf, class_names, normalize=True, title='')), step=best_epoch)
