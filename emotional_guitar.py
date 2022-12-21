@@ -24,21 +24,20 @@ tfdata_parallel = tf.data.experimental.AUTOTUNE
 # Hyperparameter domains
 hparam_domains = {}
 hparam_domains['instrument'] = hp.HParam('instrument', hp.Discrete(['acoustic_guitar', 'electric_guitar', 'piano']))
+hparam_domains['weights'] = hp.HParam('weights', hp.Discrete(['', 'MTT_musicnn', 'MSD_musicnn']))
+hparam_domains['finetuning'] = hp.HParam('finetuning', hp.Discrete([True, False]))
+hparam_domains['learning_rate'] = hp.HParam('learning_rate', hp.Discrete([0.01, 0.001, 0.0001, 0.00001, 0.000001]))
+hparam_domains['batch_size'] = hp.HParam('batch_size', hp.Discrete([32, 64, 128, 256, 512]))
 
+hparam_domains['classifier_activation'] = hp.HParam('classifier_activation', hp.Discrete(['linear', 'relu']))
+hparam_domains['final_activation'] = hp.HParam('final_activation', hp.Discrete(['linear', 'softmax', 'sigmoid']))
+hparam_domains['optimizer'] = hp.HParam('optimizer', hp.Discrete(['Adam', 'SGD']))
 hparam_domains['mel_bands'] = hp.HParam('mel_bands', hp.Discrete([96]))
 hparam_domains['num_frames'] = hp.HParam('num_frames', hp.Discrete([187]))
 hparam_domains['samplerate'] = hp.HParam('samplerate', hp.Discrete([16000]))
 hparam_domains['frame_size'] = hp.HParam('frame_size', hp.Discrete([512]))
 hparam_domains['step_size'] = hp.HParam('step_size', hp.Discrete([256]))
 hparam_domains['feature_pipeline'] = hp.HParam('feature_pipeline', hp.Discrete(['essentia', 'tfds']))
-
-hparam_domains['batch_size'] = hp.HParam('batch_size', hp.Discrete([32, 64, 128, 256, 512]))
-hparam_domains['classifier_activation'] = hp.HParam('classifier_activation', hp.Discrete(['linear', 'relu']))
-hparam_domains['final_activation'] = hp.HParam('final_activation', hp.Discrete(['linear', 'softmax', 'sigmoid']))
-hparam_domains['weights'] = hp.HParam('weights', hp.Discrete(['', 'MTT_musicnn', 'MSD_musicnn']))
-hparam_domains['finetuning'] = hp.HParam('finetuning', hp.Discrete([True, False]))
-hparam_domains['optimizer'] = hp.HParam('optimizer', hp.Discrete(['Adam', 'SGD']))
-hparam_domains['learning_rate'] = hp.HParam('learning_rate', hp.Discrete([0.01, 0.001, 0.0001]))
 
 METRIC_ACCURACY = 'sparse_categorical_accuracy'
 accurary_name = tf.keras.metrics.get(METRIC_ACCURACY).__name__.replace('_', ' ')
