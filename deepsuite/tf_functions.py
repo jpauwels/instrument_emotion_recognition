@@ -59,9 +59,9 @@ def tf_zscore(tensor, epsilon):
     return (tensor - tf.math.reduce_mean(tensor, keepdims=True)) / tf.math.maximum(tf.math.reduce_std(tensor, keepdims=True), eps)
 
 
-def tf_step_slicer(tensor, label, num_features, slice_length, start=tf.constant(-1)):
+def tf_step_slicer(tensor, num_features, slice_length, start=tf.constant(-1)):
     @tf_datatype_wrapper
-    def step_slicer(tensor, label, slice_length, start):
+    def step_slicer(tensor, slice_length, start):
         num_steps, num_features = tf.shape(tensor)
         num_slices = num_steps // slice_length
         if start < 0:
@@ -72,12 +72,11 @@ def tf_step_slicer(tensor, label, num_features, slice_length, start=tf.constant(
         tensor_expanded = tf.expand_dims(tf.expand_dims(tensor, axis=-1), axis=0)
         flat_slices = tf.image.extract_patches(tensor_expanded, sizes=[1, slice_length, num_features, 1], strides=[1, slice_length, num_features, 1], rates=[1, 1, 1, 1], padding='VALID', name='time_slicer')
         slices = tf.reshape(flat_slices, [num_slices, slice_length, num_features])
-        return slices, tf.repeat(label, num_slices)
+        return slices
 
-    slices, labels = tf.py_function(step_slicer, [tensor, label, slice_length, start], [tf.float32, tf.int32])
+    slices, = tf.py_function(step_slicer, [tensor, slice_length, start], [tf.float32])
     slices.set_shape((None, slice_length, num_features))
-    labels.set_shape((None,))
-    return slices, labels
+    return slices
 
 
 def tf_value_encoder(key_tensor, value_tensor=None):

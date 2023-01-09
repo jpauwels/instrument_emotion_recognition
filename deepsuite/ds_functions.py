@@ -45,13 +45,17 @@ def ds_melspectrogram_db(ds, src_samplerate, target_samplerate, fft_size, window
 #         .apply(lambda ds: ds_expand_channel(ds, num_parallel_calls))
 
 
-def ds_step_slicer(ds, num_features, slice_length, start=tf.constant(-1), num_parallel_calls=tf.data.experimental.AUTOTUNE):
+def ds_slice_to_ex(ds, num_features, slice_length, start=tf.constant(-1), num_parallel_calls=tf.data.experimental.AUTOTUNE):
     def slice_steps_to_ds(tensor, label, num_features, slice_length, start):
-        slices, labels = tf_step_slicer(tensor, label, num_features, slice_length, start)
+        slices = tf_step_slicer(tensor, num_features, slice_length, start)
         slices_ds = tf.data.Dataset.from_tensor_slices(slices)
-        labels_ds = tf.data.Dataset.from_tensor_slices(labels)
+        labels_ds = tf.data.Dataset.from_tensor_slices(tf.repeat(label, len(slices)))
         return tf.data.Dataset.zip((slices_ds, labels_ds))
     return ds.map(lambda tensor, label: slice_steps_to_ds(tensor, label, num_features, slice_length, start), num_parallel_calls=num_parallel_calls)
+
+
+def ds_slice_to_dim(ds, num_features, slice_length, start=tf.constant(-1), num_parallel_calls=tf.data.experimental.AUTOTUNE):
+    return ds.map(lambda tensor, label: (tf_step_slicer(tensor, num_features, slice_length, start), label), num_parallel_calls=num_parallel_calls)
 
 
 def ds_value_encoder(ds, key_tensor, value_tensor=None, num_parallel_calls=tf.data.experimental.AUTOTUNE):

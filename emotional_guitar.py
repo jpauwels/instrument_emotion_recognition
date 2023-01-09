@@ -2,7 +2,7 @@
 from essentia.streaming import VectorInput, FrameCutter, TensorflowInputMusiCNN
 import essentia
 essentia.log.infoActive = False
-from deepsuite.ds_functions import ds_step_slicer
+from deepsuite.ds_functions import ds_slice_to_ex
 from deepsuite.tf_functions import tf_datatype_wrapper
 from deepsuite.plotting import plot_confusion_matrix, mpl_fig_to_tf_image
 from deepsuite.keras_functions import get_pred_labels
@@ -142,7 +142,7 @@ def majority_voting(model, sliced_ds):
 
 
 def fit_model(model, exp_name, log_dir, save_model_dir, train_ds, val_ds, log_suffix=''):
-    sliced_ds = {'train': train_ds.cache(name='cache_presliced_train').apply(lambda ds: ds_step_slicer(ds, hparams['mel_bands'], hparams['num_frames'], -1, tfdata_parallel))}
+    sliced_ds = {'train': train_ds.cache(name='cache_presliced_train').apply(lambda ds: ds_slice_to_ex(ds, hparams['mel_bands'], hparams['num_frames'], -1, tfdata_parallel))}
 
     train_cardinality = sliced_ds['train'].flat_map(lambda x: x, name='flatten_cardinality').cardinality().numpy()
     if train_cardinality == tf.data.INFINITE_CARDINALITY or train_cardinality == tf.data.UNKNOWN_CARDINALITY or train_cardinality < 0:
@@ -154,7 +154,7 @@ def fit_model(model, exp_name, log_dir, save_model_dir, train_ds, val_ds, log_su
         .batch(hparams['batch_size'], num_parallel_calls=tfdata_parallel, name='batch_train')\
         .prefetch(tfdata_parallel, name='prefetch_train')
     if val_ds is not None:
-        sliced_ds['validation'] = val_ds.apply(lambda ds: ds_step_slicer(ds, hparams['mel_bands'], hparams['num_frames'], 0, tfdata_parallel)).cache(name='cache_sliced_val')
+        sliced_ds['validation'] = val_ds.apply(lambda ds: ds_slice_to_ex(ds, hparams['mel_bands'], hparams['num_frames'], 0, tfdata_parallel)).cache(name='cache_sliced_val')
         val_pipe = sliced_ds['validation']\
             .flat_map(lambda x: x, name='flatten_val')\
             .batch(hparams['batch_size'], num_parallel_calls=tfdata_parallel, name='batch_val')\
