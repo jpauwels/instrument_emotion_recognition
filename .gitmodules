@@ -1,0 +1,3 @@
+[submodule "keras_audio_models"]
+	path = keras_audio_models
+	url = git@github.com:jpauwels/keras_audio_models.git
