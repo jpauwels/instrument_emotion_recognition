@@ -20,6 +20,7 @@ from collections import Counter
 import tempfile
 
 tfdata_parallel = tf.data.experimental.AUTOTUNE
+tf.data.experimental.enable_debug_mode()
 
 # Hyperparameter domains
 hparam_domains = {}
