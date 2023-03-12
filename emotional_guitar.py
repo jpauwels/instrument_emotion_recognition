@@ -16,6 +16,8 @@ from tensorboard.plugins.hparams import api as hp
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, LearningRateScheduler, TensorBoard
 import numpy as np
 from datetime import datetime
+import random
+import string
 from collections import Counter
 import tempfile
 
@@ -252,18 +254,6 @@ def write_log(log_dir, hparams, exp_name, class_names, metrics_names, best_epoch
             tf.summary.image(f'{split_name.title()} Hard Voting Confusion', mpl_fig_to_tf_image(plot_confusion_matrix(hard_conf, class_names, normalize=True, title='')), step=best_epoch)
 
 
-# def clone_model_weights(model):
-#     from copy import deepcopy
-#     model_copy = tf.keras.models.clone_model(model)
-#     if not model.get_layer('frontend').trainable:
-#         model_copy.get_layer('backend').bn_flat_pool.trainable = False
-#         model_copy.get_layer('backend').penultimate.trainable = False
-#         model_copy.get_layer('backend').bn_penultimate.trainable = False
-#     model_copy.compile(optimizer=deepcopy(model.optimizer), loss=deepcopy(model.loss), metrics=deepcopy(model.compiled_metrics._metrics))
-#     model_copy.set_weights(model.get_weights())
-#     return model_copy
-
-
 def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
     tf.random.set_seed(hparams['tf_seed'])
 
@@ -271,7 +261,7 @@ def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
     class_names = ds_info.features['emotion'].names
     num_folds = len(ds_info.splits)
 
-    exp_name = str(Path(exp_base_name) / datetime.now().strftime("%y%m%d-%H%M%S"))
+    exp_name = str(Path(exp_base_name) / (datetime.now().strftime("%y%m%d-%H%M") + ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(7))))
     log_dir = log_base_dir / exp_name
 
     if hparams['num_folds'] == num_folds:
@@ -369,5 +359,5 @@ if __name__ == '__main__':
 
     for param_combo in itertools.product(*args.values()):
         hparams = dict(zip(args.keys(), param_combo))
-        print(f'Running parameter combination {", ".join(["{}: {}".format(k, v) for k, v in hparams.items()])}')
+        print(f'\n\nRunning parameter combination {", ".join(["{}: {}".format(k, v) for k, v in hparams.items()])}')
         run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir)
