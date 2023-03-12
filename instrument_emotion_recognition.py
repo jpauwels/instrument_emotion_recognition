@@ -29,10 +29,9 @@ hparam_domains = {}
 hparam_domains['instrument'] = hp.HParam('instrument', hp.Discrete(['acoustic_guitar', 'electric_guitar', 'piano']))
 hparam_domains['weights'] = hp.HParam('weights', hp.Discrete(['', 'MTT_musicnn', 'MSD_musicnn']))
 hparam_domains['finetuning'] = hp.HParam('finetuning', hp.Discrete([True, False]))
-hparam_domains['learning_rate'] = hp.HParam('learning_rate', hp.Discrete([0.01, 0.001, 0.0001, 0.00001, 0.000001]))
+hparam_domains['learning_rate'] = hp.HParam('learning_rate', hp.Discrete([0.1, 0.01, 0.001, 0.0001, 0.00001, 0.000001]))
 hparam_domains['batch_size'] = hp.HParam('batch_size', hp.Discrete([32, 64, 128, 256, 512]))
 
-hparam_domains['classifier_activation'] = hp.HParam('classifier_activation', hp.Discrete(['linear', 'relu']))
 hparam_domains['final_activation'] = hp.HParam('final_activation', hp.Discrete(['linear', 'softmax', 'sigmoid']))
 hparam_domains['optimizer'] = hp.HParam('optimizer', hp.Discrete(['Adam', 'SGD']))
 hparam_domains['mel_bands'] = hp.HParam('mel_bands', hp.Discrete([96]))
@@ -106,7 +105,7 @@ def get_model(hparams, num_classes):
     from keras_audio_models.models import build_musicnn_classifier
 
     inputs = tf.keras.Input(shape=(hparams['num_frames'], hparams['mel_bands']), name='input')
-    model = build_musicnn_classifier(inputs, num_classes, 100, hparams['classifier_activation'], hparams['final_activation'], weights=hparams['weights'])
+    model = build_musicnn_classifier(inputs, num_classes, 100, final_activation=hparams['final_activation'], weights=hparams['weights'])
 
     if not hparams['finetuning']:
         model.get_layer('frontend').trainable = False
@@ -261,7 +260,7 @@ def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
     class_names = ds_info.features['emotion'].names
     num_folds = len(ds_info.splits)
 
-    exp_name = str(Path(exp_base_name) / (datetime.now().strftime("%y%m%d-%H%M") + ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(7))))
+    exp_name = str(Path(exp_base_name) / (datetime.now().strftime('%y%m%d-%H%M-') + ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(7))))
     log_dir = log_base_dir / exp_name
 
     if hparams['num_folds'] == num_folds:
@@ -294,25 +293,22 @@ def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
         write_log(log_dir, hparams, exp_name, class_names, model.metrics_names, *model_output)
 
 
-
-
 if __name__ == '__main__':
     
     import argparse
     import itertools
     from distutils.util import strtobool
     
-    log_base_dir = Path('./tensorboard')
     exp_base_name = Path(__file__).stem
 
     def list_saved_models(save_model_dir, exp_base_name):
-        d = save_model_dir / exp_base_name
+        d = Path(save_model_dir) / exp_base_name
         try:
-            return [str('..' / x) for x in d.iterdir() if x.is_dir() or x.suffix == '.h5']
+            return [str(x) for x in d.iterdir() if x.is_dir() or x.suffix == '.h5']
         except FileNotFoundError:
             return []
 
-    hparam_domains['weights'] = hp.HParam('weights', hp.Discrete(hparam_domains['weights'].domain.values + list_saved_models(Path('saved-models'), exp_base_name)))
+    hparam_domains['weights'] = hp.HParam('weights', hp.Discrete(hparam_domains['weights'].domain.values + list_saved_models('saved-models', exp_base_name)))
 
     class ResetAppendAction(argparse._AppendAction):
         def __init__(self, option_strings, dest, **kwargs):
@@ -325,9 +321,11 @@ if __name__ == '__main__':
                 self.reset = False
             super(ResetAppendAction, self).__call__(parser, namespace, values, option_string)
 
-    parser = argparse.ArgumentParser(description='''
-    Run instrument emotion recognition experiment.''',
-    allow_abbrev=False)
+    parser = argparse.ArgumentParser(
+        description='''Run instrument emotion recognition experiment.''',
+        allow_abbrev=False,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     features_config = parser.add_argument_group('Feature options')
     features_config.add_argument('-i', '--instrument', default=['acoustic_guitar'], action=ResetAppendAction, type=str, choices=hparam_domains['instrument'].domain.values)
     features_config.add_argument('-m', '--mel-bands', default=[96], action=ResetAppendAction, type=int)
@@ -338,7 +336,6 @@ if __name__ == '__main__':
     features_config.add_argument('-t', '--feature-pipeline', default=['essentia'], action=ResetAppendAction, type=str, choices=hparam_domains['feature_pipeline'].domain.values)
 
     model_config = parser.add_argument_group('Model options')
-    model_config.add_argument('-c', '--classifier-activation', default=['relu'], action=ResetAppendAction, type=str, choices=hparam_domains['classifier_activation'].domain.values)
     model_config.add_argument('-a', '--final-activation', default=['softmax'], action=ResetAppendAction, type=str, choices=hparam_domains['final_activation'].domain.values)
     model_config.add_argument('-w', '--weights', default=['MTT_musicnn'], action=ResetAppendAction, type=str, choices=hparam_domains['weights'].domain.values)
 
@@ -350,11 +347,15 @@ if __name__ == '__main__':
     train_config.add_argument('-b', '--batch-size', default=[256], action=ResetAppendAction, type=int)
     train_config.add_argument('-e', '--epochs', default=[100], action=ResetAppendAction, type=int)
     train_config.add_argument('--early-stopping-patience', default=[30], action=ResetAppendAction, type=int)
-    train_config.add_argument('--save-model-dir', default='', action='store', type=str)
     train_config.add_argument('--finetuning', default=[False], action=ResetAppendAction, type=lambda x: bool(strtobool(x)))
+
+    paths_config = parser.add_argument_group('Paths')
+    paths_config.add_argument('--log-dir', default='./tensorboard', action='store', type=str)
+    paths_config.add_argument('--save-model-dir', default='', action='store', type=str)
 
     args = vars(parser.parse_args())
     save_model_dir = Path(args.pop('save_model_dir'))
+    log_base_dir = Path(args.pop('log_dir'))
     write_hparam_domains(log_base_dir / exp_base_name)
 
     for param_combo in itertools.product(*args.values()):

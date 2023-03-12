@@ -1,0 +1,3 @@
+essentia-tensorflow
+tensorflow
+tensorflow_datasets
