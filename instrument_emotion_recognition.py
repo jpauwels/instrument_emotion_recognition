@@ -121,7 +121,7 @@ def get_model(hparams, num_classes):
     return model
 
 
-def majority_voting(model, sliced_ds):
+def majority_voting(hparams, model, sliced_ds):
     soft_metrics = []
     hard_metrics = []
     soft_voting_labels = []
@@ -143,7 +143,7 @@ def majority_voting(model, sliced_ds):
     return soft_metric, hard_metric, true_labels, soft_voting_labels, hard_voting_labels
 
 
-def fit_model(model, exp_name, log_dir, save_model_dir, train_ds, val_ds, log_suffix=''):
+def fit_model(hparams, model, exp_name, log_dir, save_model_dir, train_ds, val_ds, log_suffix=''):
     sliced_ds = {'train': train_ds.cache(name='cache_presliced_train').apply(lambda ds: ds_slice_to_ex(ds, hparams['mel_bands'], hparams['num_frames'], -1, tfdata_parallel))}
 
     train_cardinality = sliced_ds['train'].flat_map(lambda x: x, name='flatten_cardinality').cardinality().numpy()
@@ -206,7 +206,7 @@ def fit_model(model, exp_name, log_dir, save_model_dir, train_ds, val_ds, log_su
     majority_eval_results = {}
     majority_conf_mat = {}
     for name, ds in sliced_ds.items():
-        soft_metric, hard_metric, true_labels, soft_voting_labels, hard_voting_labels = majority_voting(model, ds)
+        soft_metric, hard_metric, true_labels, soft_voting_labels, hard_voting_labels = majority_voting(hparams, model, ds)
         majority_eval_results[name] = soft_metric, hard_metric
         soft_conf = tf.math.confusion_matrix(true_labels, soft_voting_labels)
         hard_conf = tf.math.confusion_matrix(true_labels, hard_voting_labels)
@@ -215,7 +215,7 @@ def fit_model(model, exp_name, log_dir, save_model_dir, train_ds, val_ds, log_su
     return best_epoch, eval_results, conf_mat, majority_eval_results, majority_conf_mat
 
 
-def write_log(log_dir, hparams, exp_name, class_names, metrics_names, best_epoch, eval_results, conf_mat, majority_eval_results, majority_conf_mat, eval_stdev=None, majority_stdev=None):
+def write_log(log_dir, hparams, exp_name, class_names, metrics_names, best_epoch, eval_results, conf_mat, majority_eval_results, majority_conf_mat):
     with tf.summary.create_file_writer(str(log_dir), filename_suffix='.final.v2').as_default():
         hp.hparams(hparams, trial_id=exp_name)
         if best_epoch is not None:
@@ -254,6 +254,7 @@ def write_log(log_dir, hparams, exp_name, class_names, metrics_names, best_epoch
 
 
 def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
+    print(f'\n\nRunning parameter combination {", ".join(["{}: {}".format(k, v) for k, v in hparams.items()])}')
     tf.random.set_seed(hparams['tf_seed'])
 
     ds_info = tfds.builder(f'{hparams["instrument"]}_emotion_recognition').info
@@ -277,7 +278,7 @@ def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
             else:
                 fold_model = get_model(hparams, len(class_names))
                 fold_model.set_weights(init_model.get_weights())
-            fold_outputs.append(fit_model(fold_model, exp_name, log_dir, save_model_dir, train_ds, val_ds, log_suffix=fold_suffix))
+            fold_outputs.append(fit_model(hparams, fold_model, exp_name, log_dir, save_model_dir, train_ds, val_ds, log_suffix=fold_suffix))
         _, fold_results, fold_conf_mats, fold_majority_eval_results, fold_majority_conf_mat = zip(*fold_outputs)
         mean_eval_results = {split: list(zip(np.mean(np.stack([f[split] for f in fold_results]), axis=0), 
                                              np.std(np.stack([f[split] for f in fold_results]), axis=0))) for split in fold_results[0].keys()}
@@ -289,12 +290,11 @@ def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
     else:
         train_ds, val_ds = get_features(hparams, range(num_folds))
         model = get_model(hparams, len(class_names))
-        model_output = fit_model(model, exp_name, log_dir, save_model_dir, train_ds, val_ds)
+        model_output = fit_model(hparams, model, exp_name, log_dir, save_model_dir, train_ds, val_ds)
         write_log(log_dir, hparams, exp_name, class_names, model.metrics_names, *model_output)
 
 
-if __name__ == '__main__':
-    
+def cli_parser(arg_list=None):
     import argparse
     import itertools
     from distutils.util import strtobool
@@ -353,12 +353,18 @@ if __name__ == '__main__':
     paths_config.add_argument('--log-dir', default='./tensorboard', action='store', type=str)
     paths_config.add_argument('--save-model-dir', default='', action='store', type=str)
 
-    args = vars(parser.parse_args())
+    args = vars(parser.parse_args(arg_list))
     save_model_dir = Path(args.pop('save_model_dir'))
     log_base_dir = Path(args.pop('log_dir'))
     write_hparam_domains(log_base_dir / exp_base_name)
 
-    for param_combo in itertools.product(*args.values()):
-        hparams = dict(zip(args.keys(), param_combo))
-        print(f'\n\nRunning parameter combination {", ".join(["{}: {}".format(k, v) for k, v in hparams.items()])}')
+    hparams_set = [dict(zip(args.keys(), param_combo)) for param_combo in itertools.product(*args.values())]
+    return hparams_set, log_base_dir, exp_base_name, save_model_dir
+
+
+if __name__ == '__main__':
+
+    hparams_set, log_base_dir, exp_base_name, save_model_dir = cli_parser()
+
+    for hparams in hparams_set:
         run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir)
