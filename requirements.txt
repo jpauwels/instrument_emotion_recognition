@@ -1,3 +1,4 @@
 essentia-tensorflow
+pydub
 tensorflow
 tensorflow_datasets
