@@ -1,4 +1,4 @@
 essentia-tensorflow
 pydub
-tensorflow
-tensorflow_datasets
+tensorflow >= 2.11
+tensorflow_datasets >= 4.8.3

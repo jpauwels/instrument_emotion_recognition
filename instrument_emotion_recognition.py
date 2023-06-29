@@ -70,7 +70,7 @@ def get_features(hparams, train_splits, val_split=None):
         def ds_melspectrogram_essentia(ds, frame_size, step_size, num_parallel_calls=tf.data.experimental.AUTOTUNE):
             @tf_datatype_wrapper
             def melspectrogram_essentia(audio, frame_size, step_size):
-                audio_input = VectorInput(audio[:, 0])
+                audio_input = VectorInput(audio)
                 fc = FrameCutter(frameSize=int(frame_size), hopSize=int(step_size), startFromZero=True, validFrameThresholdRatio=1)
                 extractor = TensorflowInputMusiCNN()
                 pool = essentia.Pool()
