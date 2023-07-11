@@ -288,7 +288,7 @@ def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
         sum_majority_conf_mat = {split: [v for v in tf.reduce_sum([f[split] for f in fold_majority_conf_mat], axis=0)] for split in fold_majority_conf_mat[0].keys()}
         write_log(log_dir, hparams, exp_name, class_names, fold_model.metrics_names, None, mean_eval_results, sum_conf_mat, mean_majority_eval_results, sum_majority_conf_mat)
     else:
-        train_ds, val_ds = get_features(hparams, range(num_folds))
+        train_ds, val_ds = get_features(hparams, range(1, num_folds+1))
         model = get_model(hparams, len(class_names))
         model_output = fit_model(hparams, model, exp_name, log_dir, save_model_dir, train_ds, val_ds)
         write_log(log_dir, hparams, exp_name, class_names, model.metrics_names, *model_output)
@@ -304,7 +304,7 @@ def cli_parser(arg_list=None):
     def list_saved_models(save_model_dir, exp_base_name):
         d = Path(save_model_dir) / exp_base_name
         try:
-            return [str(x) for x in d.iterdir() if x.is_dir() or x.suffix == '.h5']
+            return [str(x.parent / x.stem) for x in d.iterdir() if x.is_dir() or x.suffix == '.h5']
         except FileNotFoundError:
             return []
 
