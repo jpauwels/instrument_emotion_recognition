@@ -253,7 +253,7 @@ def write_log(log_dir, hparams, exp_name, class_names, metrics_names, best_epoch
             tf.summary.image(f'{split_name.title()} Hard Voting Confusion', mpl_fig_to_tf_image(plot_confusion_matrix(hard_conf, class_names, normalize=True, title='')), step=best_epoch)
 
 
-def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
+def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir, save_model_name):
     print(f'\n\nRunning parameter combination {", ".join(["{}: {}".format(k, v) for k, v in hparams.items()])}')
     tf.random.set_seed(hparams['tf_seed'])
 
@@ -261,7 +261,10 @@ def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
     class_names = ds_info.features['emotion'].names
     num_folds = len(ds_info.splits)
 
-    exp_name = str(Path(exp_base_name) / (datetime.now().strftime('%y%m%d-%H%M-') + ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(7))))
+    if not save_model_name:
+        save_model_name = (datetime.now().strftime('%y%m%d-%H%M-') + ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(7)))
+    exp_name = str(Path(exp_base_name) / save_model_name)
+    print(exp_name)
     log_dir = log_base_dir / exp_name
 
     if hparams['num_folds'] == num_folds:
@@ -279,14 +282,15 @@ def run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir):
                 fold_model = get_model(hparams, len(class_names))
                 fold_model.set_weights(init_model.get_weights())
             fold_outputs.append(fit_model(hparams, fold_model, exp_name, log_dir, save_model_dir, train_ds, val_ds, log_suffix=fold_suffix))
-        _, fold_results, fold_conf_mats, fold_majority_eval_results, fold_majority_conf_mat = zip(*fold_outputs)
+        fold_best_epochs, fold_results, fold_conf_mats, fold_majority_eval_results, fold_majority_conf_mat = zip(*fold_outputs)
+        mean_best_epoch = np.mean(fold_best_epochs)
         mean_eval_results = {split: list(zip(np.mean(np.stack([f[split] for f in fold_results]), axis=0), 
                                              np.std(np.stack([f[split] for f in fold_results]), axis=0))) for split in fold_results[0].keys()}
         sum_conf_mat = {split: tf.reduce_sum([f[split] for f in fold_conf_mats], axis=0) for split in fold_conf_mats[0].keys()}
         mean_majority_eval_results = {split: list(zip(np.mean(np.stack([f[split] for f in fold_majority_eval_results]), axis=0),
                                                       np.std(np.stack([f[split] for f in fold_majority_eval_results]), axis=0))) for split in fold_majority_eval_results[0].keys()}
         sum_majority_conf_mat = {split: [v for v in tf.reduce_sum([f[split] for f in fold_majority_conf_mat], axis=0)] for split in fold_majority_conf_mat[0].keys()}
-        write_log(log_dir, hparams, exp_name, class_names, fold_model.metrics_names, None, mean_eval_results, sum_conf_mat, mean_majority_eval_results, sum_majority_conf_mat)
+        write_log(log_dir, hparams, exp_name, class_names, fold_model.metrics_names, mean_best_epoch, mean_eval_results, sum_conf_mat, mean_majority_eval_results, sum_majority_conf_mat)
     else:
         train_ds, val_ds = get_features(hparams, range(1, num_folds+1))
         model = get_model(hparams, len(class_names))
@@ -352,19 +356,21 @@ def cli_parser(arg_list=None):
     paths_config = parser.add_argument_group('Paths')
     paths_config.add_argument('--log-dir', default='./tensorboard', action='store', type=str)
     paths_config.add_argument('--save-model-dir', default='', action='store', type=str)
+    paths_config.add_argument('--save-model-name', default='', action='store', type=str)
 
     args = vars(parser.parse_args(arg_list))
     save_model_dir = Path(args.pop('save_model_dir'))
+    save_model_name = args.pop('save_model_name')
     log_base_dir = Path(args.pop('log_dir'))
     write_hparam_domains(log_base_dir / exp_base_name)
 
     hparams_set = [dict(zip(args.keys(), param_combo)) for param_combo in itertools.product(*args.values())]
-    return hparams_set, log_base_dir, exp_base_name, save_model_dir
+    return hparams_set, log_base_dir, exp_base_name, save_model_dir, save_model_name
 
 
 if __name__ == '__main__':
 
-    hparams_set, log_base_dir, exp_base_name, save_model_dir = cli_parser()
+    hparams_set, log_base_dir, exp_base_name, save_model_dir, save_model_name = cli_parser()
 
     for hparams in hparams_set:
-        run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir)
+        run_experiment(hparams, log_base_dir, exp_base_name, save_model_dir, save_model_name)
