@@ -197,7 +197,7 @@ def fit_model(hparams, model, exp_name, log_dir, save_model_dir, train_ds, val_d
     eval_results = {'train': model.evaluate(train_pipe, verbose=0)}
     conf_mat = {'train': tf.math.confusion_matrix(*get_pred_labels(model, train_pipe))}
     if val_ds is not None:
-        best_epoch = fit_log.history[earlystopper.monitor].index(earlystopper.best)
+        best_epoch = fit_log.history[earlystopper.monitor].index(earlystopper.best)+1
         eval_results['validation'] = model.evaluate(val_pipe, verbose=0)
         conf_mat['validation'] = tf.math.confusion_matrix(*get_pred_labels(model, val_pipe))
     else:
@@ -231,7 +231,7 @@ def write_log(log_dir, hparams, exp_name, class_names, metrics_names, best_epoch
                     print(f'The final model has achieved a {split_name} {metric_name} of {value[0]:.3f} +/- {value[1]:.3f}')
                 except TypeError:
                     tf.summary.scalar(f'{split_name}.{metric_name}', value, step=0)
-                    print(f'The final model has achieved a {split_name} {metric_name} of {value:.3f} at epoch {best_epoch+1}')
+                    print(f'The final model has achieved a {split_name} {metric_name} of {value:.3f} at epoch {best_epoch}')
 
         for split_name, conf in conf_mat.items():
             tf.summary.image(f'{split_name.title()} Confusion', mpl_fig_to_tf_image(plot_confusion_matrix(conf, class_names, normalize=True, title='')), step=best_epoch)
@@ -246,7 +246,7 @@ def write_log(log_dir, hparams, exp_name, class_names, metrics_names, best_epoch
             except IndexError:
                 tf.summary.scalar(f'{split_name}.soft_voting_{METRIC_ACCURACY}', soft_metric, step=0)
                 tf.summary.scalar(f'{split_name}.hard_voting_{METRIC_ACCURACY}', hard_metric, step=0)
-                print(f'The final model has achieved a {split_name} soft voting {accurary_name} of {100*soft_metric:.3f}% and a {split_name} hard voting {accurary_name} of {100*hard_metric:.3f}% at epoch {best_epoch+1}')
+                print(f'The final model has achieved a {split_name} soft voting {accurary_name} of {100*soft_metric:.3f}% and a {split_name} hard voting {accurary_name} of {100*hard_metric:.3f}% at epoch {best_epoch}')
         
         for split_name, (soft_conf, hard_conf) in majority_conf_mat.items():
             tf.summary.image(f'{split_name.title()} Soft Voting Confusion', mpl_fig_to_tf_image(plot_confusion_matrix(soft_conf, class_names, normalize=True, title='')), step=best_epoch)
