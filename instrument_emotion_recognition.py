@@ -192,7 +192,7 @@ def fit_model(hparams, model, exp_name, log_dir, save_model_dir, train_ds, val_d
         model.get_layer('backend').bn_flat_pool.trainable = True
         model.get_layer('backend').penultimate.trainable = True
         model.get_layer('backend').bn_penultimate.trainable = True
-        model.save(save_path, save_format='h5')
+        model.save(save_path, save_format='h5', include_optimizer=False)
 
     eval_results = {'train': model.evaluate(train_pipe, verbose=0)}
     conf_mat = {'train': tf.math.confusion_matrix(*get_pred_labels(model, train_pipe))}
