@@ -130,7 +130,7 @@ def majority_voting(hparams, model, sliced_ds):
     true_labels = []
     metric = tf.keras.metrics.get(METRIC_ACCURACY)
     for file_slices in sliced_ds:
-        true_label = next(iter(file_slices))[1].numpy()
+        true_label = next(iter(file_slices))[1]
         file_results = model.predict(file_slices.batch(hparams['batch_size']), verbose=0)
         soft_results = file_results.mean(axis=0)
         hard_metrics.append(tf.reduce_mean(metric(y_true=tf.repeat(true_label, file_results.shape[0]), y_pred=file_results)))
@@ -138,17 +138,18 @@ def majority_voting(hparams, model, sliced_ds):
         true_labels.append(true_label)
         soft_voting_labels.append(soft_results.argmax())
         hard_voting_labels.append(next(Counter(file_results.argmax(axis=1)).elements()))
-    hard_metric = tf.reduce_mean(hard_metrics).numpy()
-    soft_metric = tf.reduce_mean(soft_metrics).numpy()
+    hard_metric = tf.reduce_mean(hard_metrics)
+    soft_metric = tf.reduce_mean(soft_metrics)
     return soft_metric, hard_metric, true_labels, soft_voting_labels, hard_voting_labels
 
 
 def fit_model(hparams, model, exp_name, log_dir, save_model_dir, train_ds, val_ds, log_suffix=''):
     sliced_ds = {'train': train_ds.cache(name='cache_presliced_train').apply(lambda ds: ds_slice_to_ex(ds, hparams['mel_bands'], hparams['num_frames'], -1, tfdata_parallel))}
 
-    train_cardinality = sliced_ds['train'].flat_map(lambda x: x, name='flatten_cardinality').cardinality().numpy()
-    if train_cardinality == tf.data.INFINITE_CARDINALITY or train_cardinality == tf.data.UNKNOWN_CARDINALITY or train_cardinality < 0:
-        train_cardinality = 3000
+    train_cardinality = sliced_ds['train'].flat_map(lambda x: x, name='flatten_cardinality').cardinality()
+    if train_cardinality == tf.data.INFINITE_CARDINALITY or train_cardinality == tf.data.UNKNOWN_CARDINALITY:
+        train_cardinality = tf.cast(sliced_ds['train'].flat_map(lambda x: x, name='flatten_cardinality').reduce(0, lambda x,_: x+1), dtype=tf.int64)
+        # train_cardinality = tf.constant(3000, dtype=tf.int64)
     
     train_pipe = sliced_ds['train']\
         .flat_map(lambda x: x, name='flatten_train')\
