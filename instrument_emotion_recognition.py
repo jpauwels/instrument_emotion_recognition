@@ -33,7 +33,7 @@ hparam_domains['learning_rate'] = hp.HParam('learning_rate', hp.Discrete([0.1, 0
 hparam_domains['batch_size'] = hp.HParam('batch_size', hp.Discrete([32, 64, 128, 256, 512]))
 
 hparam_domains['final_activation'] = hp.HParam('final_activation', hp.Discrete(['linear', 'softmax', 'sigmoid']))
-hparam_domains['optimizer'] = hp.HParam('optimizer', hp.Discrete(['Adam', 'SGD']))
+hparam_domains['optimizer'] = hp.HParam('optimizer', hp.Discrete(['Adam', 'AdamW', 'SGD']))
 hparam_domains['mel_bands'] = hp.HParam('mel_bands', hp.Discrete([96]))
 hparam_domains['num_frames'] = hp.HParam('num_frames', hp.Discrete([187]))
 hparam_domains['samplerate'] = hp.HParam('samplerate', hp.Discrete([16000]))
