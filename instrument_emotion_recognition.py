@@ -32,6 +32,7 @@ hparam_domains['finetuning'] = hp.HParam('finetuning', hp.Discrete([True, False]
 hparam_domains['learning_rate'] = hp.HParam('learning_rate', hp.Discrete([0.1, 0.01, 0.001, 0.0001, 0.00001, 0.000001]))
 hparam_domains['batch_size'] = hp.HParam('batch_size', hp.Discrete([32, 64, 128, 256, 512]))
 
+hparam_domains['weight_decay'] = hp.HParam('weight_decay', hp.RealInterval(0., 1.))
 hparam_domains['final_activation'] = hp.HParam('final_activation', hp.Discrete(['linear', 'softmax', 'sigmoid']))
 hparam_domains['optimizer'] = hp.HParam('optimizer', hp.Discrete(['Adam', 'AdamW', 'SGD']))
 hparam_domains['mel_bands'] = hp.HParam('mel_bands', hp.Discrete([96]))
@@ -115,7 +116,7 @@ def get_model(hparams, num_classes):
         model.get_layer('backend').bn_penultimate.trainable = False
 
     from_logits = model.get_layer('classifier').activation == tf.keras.activations.linear
-    optimizer = tf.keras.optimizers.get({'class_name': hparams['optimizer'], 'config': {'learning_rate': hparams['learning_rate']}})
+    optimizer = tf.keras.optimizers.get({'class_name': hparams['optimizer'], 'config': {'learning_rate': hparams['learning_rate'], 'weight_decay': hparams['weight_decay']}})
     model.compile(optimizer=optimizer, loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=from_logits), metrics=[METRIC_ACCURACY])
     
     return model
@@ -345,6 +346,7 @@ def cli_parser(arg_list=None):
     train_config.add_argument('--tf-seed', default=[0], action=ResetAppendAction, type=int)
     train_config.add_argument('-o', '--optimizer', default=['Adam'], action=ResetAppendAction, type=str, choices=hparam_domains['optimizer'].domain.values)
     train_config.add_argument('-l', '--learning-rate', default=[0.0001], action=ResetAppendAction, type=float)
+    train_config.add_argument('-d', '--weight-decay', default=[0], action=ResetAppendAction, type=float)
     train_config.add_argument('-b', '--batch-size', default=[256], action=ResetAppendAction, type=int)
     train_config.add_argument('-e', '--epochs', default=[100], action=ResetAppendAction, type=int)
     train_config.add_argument('--early-stopping-patience', default=[30], action=ResetAppendAction, type=int)
