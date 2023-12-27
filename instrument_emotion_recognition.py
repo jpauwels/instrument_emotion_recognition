@@ -105,7 +105,7 @@ def get_model(hparams, num_classes):
     from keras_audio_models.models import build_musicnn_classifier
 
     inputs = tf.keras.Input(shape=(hparams['num_frames'], hparams['mel_bands']), name='input')
-    model = build_musicnn_classifier(inputs, num_classes, 100, final_activation=hparams['final_activation'], weights=hparams['weights'])
+    model = build_musicnn_classifier(inputs, num_classes, 100, final_activation=hparams['final_activation'], weights=hparams['weights'], training=False)
 
     if not hparams['finetuning']:
         model.get_layer('frontend').trainable = False
@@ -188,11 +188,7 @@ def fit_model(hparams, model, exp_name, log_dir, save_model_dir, train_ds, val_d
     if save_model_dir:
         save_path = save_model_dir / (exp_name+log_suffix+'.h5')
         save_path.parent.mkdir(parents=True, exist_ok=True)
-        model.get_layer('frontend').trainable = True
-        model.get_layer('midend').trainable = True
-        model.get_layer('backend').bn_flat_pool.trainable = True
-        model.get_layer('backend').penultimate.trainable = True
-        model.get_layer('backend').bn_penultimate.trainable = True
+        model.trainable = True
         model.save(save_path, save_format='h5', include_optimizer=False)
 
     eval_results = {'train': model.evaluate(train_pipe, verbose=0)}
