@@ -106,9 +106,9 @@ def get_model(hparams, num_classes):
     from keras_audio_models.models import build_musicnn_classifier
 
     inputs = tf.keras.Input(shape=(hparams['num_frames'], hparams['mel_bands']), name='input')
-    model = build_musicnn_classifier(inputs, num_classes, 100, final_activation=hparams['final_activation'], weights=hparams['weights'], training=False)
+    model = build_musicnn_classifier(inputs, num_classes, 100, final_activation=hparams['final_activation'], weights=hparams['weights'], training=not hparams['weights'])
 
-    if not hparams['finetuning']:
+    if not hparams['finetuning'] and hparams['weights']:
         model.get_layer('frontend').trainable = False
         model.get_layer('midend').trainable = False
         model.get_layer('backend').bn_flat_pool.trainable = False
